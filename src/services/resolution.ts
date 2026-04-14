@@ -1,0 +1,127 @@
+import type { Bindings, EntityRow } from '../types';
+import { getEmbedding } from './embeddings';
+import { cascadingSearch } from './vectorize';
+import { distance } from 'fastest-levenshtein';
+
+/**
+ * Compute a fuzzy match score between two strings (0–1 similarity).
+ * Uses Levenshtein distance normalized by the longer string's length.
+ */
+export function fuzzyMatch(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1.0;
+  return 1 - distance(a.toLowerCase(), b.toLowerCase()) / maxLen;
+}
+
+/**
+ * Compute a scope priority for a record (lower = narrower/preferred).
+ * 0 = project+user, 1 = user-wide, 2 = project-wide, 3 = global
+ */
+function scopePriority(
+  row: EntityRow,
+  projectId: string,
+  userId: string
+): number {
+  const isProject = row.project_id === projectId;
+  const isUser = row.user_id === userId;
+  if (isProject && isUser) return 0;
+  if (!isProject && isUser) return 1;
+  if (isProject && !isUser) return 2;
+  return 3;
+}
+
+/**
+ * Full entity resolution pipeline: exact → fuzzy → semantic.
+ *
+ * Searches project+user, user-wide, project-wide, and global scopes,
+ * preferring narrower-scoped matches.
+ */
+export async function resolveEntity(
+  env: Bindings,
+  name: string,
+  entityType: string,
+  projectId: string,
+  userId: string
+): Promise<EntityRow | null> {
+  // Stage 1 — Exact match in D1
+  const exactMatch = await env.DB.prepare(
+    `SELECT * FROM entities
+     WHERE LOWER(name) = LOWER(?) AND entity_type = ?
+     AND project_id IN (?, 'global')
+     AND user_id IN (?, 'global', 'default')
+     ORDER BY
+       CASE
+         WHEN project_id = ? AND user_id = ? THEN 0
+         WHEN project_id != ? AND user_id = ? THEN 1
+         WHEN project_id = ? AND user_id != ? THEN 2
+         ELSE 3
+       END
+     LIMIT 1`
+  )
+    .bind(name, entityType, projectId, userId, projectId, userId, projectId, userId, projectId, userId)
+    .first<EntityRow>();
+
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  // Stage 2 — Fuzzy match (bounded to prevent loading entire table)
+  const candidates = await env.DB.prepare(
+    `SELECT * FROM entities
+     WHERE entity_type = ? AND project_id IN (?, 'global')
+     AND user_id IN (?, 'global', 'default')
+     LIMIT 500`
+  )
+    .bind(entityType, projectId, userId)
+    .all<EntityRow>();
+
+  let bestFuzzy: EntityRow | null = null;
+  let bestFuzzyScore = 0;
+  let bestFuzzyPriority = 4;
+
+  for (const candidate of candidates.results) {
+    const score = fuzzyMatch(name, candidate.name);
+    if (score >= 0.85) {
+      const priority = scopePriority(candidate, projectId, userId);
+
+      if (
+        score > bestFuzzyScore ||
+        (score === bestFuzzyScore && priority < bestFuzzyPriority)
+      ) {
+        bestFuzzy = candidate;
+        bestFuzzyScore = score;
+        bestFuzzyPriority = priority;
+      }
+    }
+  }
+
+  if (bestFuzzy) {
+    return bestFuzzy;
+  }
+
+  // Stage 3 — Semantic match via Vectorize
+  const embedding = await getEmbedding(name, env.AI);
+  const searchResults = await cascadingSearch(
+    env.VEC_ENTITIES,
+    embedding,
+    projectId,
+    userId,
+    1
+  );
+
+  const topResult = searchResults[0];
+  if (topResult && topResult.score >= 0.8) {
+    const entity = await env.DB.prepare(
+      `SELECT * FROM entities WHERE id = ?`
+    )
+      .bind(topResult.id)
+      .first<EntityRow>();
+
+    if (entity) {
+      return entity;
+    }
+  }
+
+  // No match found at any stage
+  return null;
+}

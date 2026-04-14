@@ -1,0 +1,47 @@
+{
+  "name": "cf-agent-memory",
+  "version": "0.1.0",
+  "description": "Cloudflare-native agent memory system with semantic search — short-term, long-term, and procedural memory on D1 + Vectorize + KV",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "homepage": "",
+  "bugs": {
+    "url": ""
+  },
+  "keywords": [
+    "agent",
+    "memory",
+    "cloudflare",
+    "workers",
+    "mcp",
+    "vectorize",
+    "d1",
+    "semantic-search",
+    "llm",
+    "ai"
+  ],
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4",
+    "@hono/zod-validator": "^0.4",
+    "zod": "^3",
+    "fastest-levenshtein": "^1"
+  },
+  "devDependencies": {
+    "vitest": "^3",
+    "@cloudflare/vitest-pool-workers": "^0.8",
+    "@cloudflare/workers-types": "^4",
+    "wrangler": "^4",
+    "typescript": "^5"
+  }
+}

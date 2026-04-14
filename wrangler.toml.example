@@ -1,0 +1,41 @@
+name = "cf-agent-memory"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+
+[vars]
+EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
+EMBEDDING_DIMENSIONS = "768"
+AUTH_TOKEN = "CHANGE_ME"  # Set a strong secret token for API authentication
+
+[[d1_databases]]
+binding = "DB"
+database_name = "agent-memory"
+database_id = "YOUR_D1_DATABASE_ID"  # Run: npx wrangler d1 create agent-memory
+migrations_dir = "migrations"
+
+[[vectorize]]
+binding = "VEC_MESSAGES"
+index_name = "cf-mem-messages"
+
+[[vectorize]]
+binding = "VEC_ENTITIES"
+index_name = "cf-mem-entities"
+
+[[vectorize]]
+binding = "VEC_PREFERENCES"
+index_name = "cf-mem-preferences"
+
+[[vectorize]]
+binding = "VEC_FACTS"
+index_name = "cf-mem-facts"
+
+[[vectorize]]
+binding = "VEC_TRACES"
+index_name = "cf-mem-traces"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "YOUR_KV_NAMESPACE_ID"  # Run: npx wrangler kv namespace create CACHE
+
+[ai]
+binding = "AI"

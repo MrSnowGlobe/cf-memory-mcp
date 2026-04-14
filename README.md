@@ -1,0 +1,330 @@
+# cf-agent-memory
+
+Cloudflare-native agent memory system with semantic search. Three memory types — short-term, long-term, and procedural — built on D1 + Vectorize + KV + Workers AI.
+
+Inspired by [neo4j-labs/agent-memory](https://github.com/neo4j-labs/agent-memory), rebuilt to run entirely on Cloudflare's edge with zero external dependencies.
+
+## Features
+
+- **Three memory types** — short-term (conversations), long-term (entities, preferences, temporal facts), procedural (reasoning traces, tool stats)
+- **Semantic search** across all memory types via Vectorize (768-dim embeddings, cosine similarity)
+- **Entity resolution** — 3-stage deduplication (exact match, fuzzy Levenshtein >= 0.85, semantic cosine >= 0.8)
+- **4-tier scoping** — project+user > user > project > global, with automatic cascading reads and scope-boosted ranking
+- **MCP server** — JSON-RPC over Streamable HTTP and SSE, works with Claude Code, Claude Desktop, or any MCP client
+- **REST API** — 30+ endpoints for direct integration
+- **Scale-to-zero** — $5/mo base on Cloudflare Workers Paid plan
+- **Single deploy** — `npx wrangler deploy`, no infrastructure to manage
+
+## How It Works
+
+### Memory Types
+
+**Short-term memory** stores conversation sessions and messages. Each message is embedded and indexed in Vectorize for semantic retrieval. Recent conversations are cached in KV (60s TTL) for fast access.
+
+**Long-term memory** stores three kinds of knowledge:
+- **Entities** — people, objects, locations, events, organizations. Adding an entity runs a 3-stage resolution pipeline (exact name match in D1, fuzzy Levenshtein match >= 0.85, semantic vector match >= 0.8) to prevent duplicates.
+- **Preferences** — categorized user preferences (e.g. coding style, tools). Searches apply strict scope precedence: a project-level preference overrides a global one in the same category.
+- **Facts** — subject-predicate-object triples with optional temporal validity (`valid_from`/`valid_until`). Expired facts are automatically excluded from queries.
+
+**Procedural memory** records reasoning traces — what the agent tried, what worked, what failed. Each trace contains steps and tool calls. Tool call statistics are pre-aggregated for fast retrieval (5min KV cache).
+
+### Scoping Model
+
+Every request includes a project (`X-Project-Id` header, default: `"default"`) and user (`X-User-Id` header, default: `"default"`). Writes go to the most specific scope. Reads cascade through 4 tiers, with narrower scopes boosted higher:
+
+| Tier | Namespace | Score Boost | Example |
+|------|-----------|-------------|---------|
+| 0 | project+user | +0.15 | `myapp:alice` |
+| 1 | user | +0.10 | `user:alice` |
+| 2 | project | +0.05 | `myapp` |
+| 3 | global | +0.00 | `global` |
+
+All tier queries fire in parallel. Results are merged, deduplicated by ID (keeping the highest score), and sorted. This means a user's project-specific memories always rank above general knowledge, but global facts are still surfaced when relevant.
+
+**Promotion** copies a memory item to a wider scope (`user` or `global`) without deleting the original. An audit log records every promotion.
+
+### Architecture
+
+```
+Client (MCP / REST)
+        │
+        ▼
+┌─────────────────────────────────┐
+│  Cloudflare Worker (Hono)       │
+│  ├─ Auth middleware             │
+│  ├─ Project scope middleware    │
+│  └─ User scope middleware       │
+├─────────────────────────────────┤
+│  Memory Classes                 │
+│  ├─ ShortTermMemory             │
+│  ├─ LongTermMemory              │
+│  └─ ProceduralMemory            │
+├─────────────────────────────────┤
+│  Services                       │
+│  ├─ Embeddings (Workers AI)     │
+│  ├─ Vectorize (5 indexes)       │
+│  ├─ Entity Resolution           │
+│  └─ Cache (KV)                  │
+├─────────────────────────────────┤
+│  Cloudflare Bindings            │
+│  ├─ D1 (SQLite — relational)    │
+│  ├─ Vectorize (semantic search) │
+│  ├─ KV (caching)                │
+│  └─ Workers AI (embeddings)     │
+└─────────────────────────────────┘
+```
+
+D1 stores all structured data (13 tables). Vectorize stores embeddings across 5 indexes (messages, entities, preferences, facts, traces), namespaced by scope tier. KV caches hot paths. Workers AI generates 768-dimension embeddings using `@cf/baai/bge-base-en-v1.5`.
+
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) >= 18
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up) with Workers Paid plan ($5/mo)
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/)
+
+## Setup
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/MrSnowGlobe/cf-agent-memory.git
+cd cf-agent-memory
+npm install
+```
+
+### 2. Create Cloudflare resources
+
+```bash
+# Create the D1 database
+npx wrangler d1 create agent-memory
+# Note the database_id in the output
+
+# Create the KV namespace
+npx wrangler kv namespace create CACHE
+# Note the id in the output
+
+# Create all 5 Vectorize indexes
+bash scripts/setup-vectorize.sh
+```
+
+### 3. Configure
+
+```bash
+cp wrangler.toml.example wrangler.toml
+```
+
+Edit `wrangler.toml` and fill in:
+- `database_id` — from the D1 create output
+- `id` under `[[kv_namespaces]]` — from the KV create output
+- `AUTH_TOKEN` — set to a strong secret (this protects all API/MCP access)
+
+### 4. Apply database migration
+
+```bash
+npx wrangler d1 migrations apply agent-memory --remote
+```
+
+### 5. Deploy
+
+```bash
+npx wrangler deploy
+```
+
+Your memory service is now live at `https://cf-agent-memory.<your-subdomain>.workers.dev`. Verify with:
+
+```bash
+curl https://cf-agent-memory.<your-subdomain>.workers.dev/health
+# {"status":"ok"}
+```
+
+## Local Development
+
+```bash
+npx wrangler d1 migrations apply agent-memory --local
+npm run dev       # Start local dev server
+npm test          # Run all tests (no Cloudflare account needed)
+npm run typecheck # TypeScript strict mode check
+```
+
+Tests use Vitest with Miniflare — no Cloudflare account needed.
+
+## MCP Integration
+
+This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server exposing 8 tools over both Streamable HTTP (`POST /mcp`) and SSE (`GET /mcp/sse`) transports.
+
+### Claude Code / Claude Desktop
+
+Add to your `.mcp.json` (or copy from `templates/.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://cf-agent-memory.YOUR_SUBDOMAIN.workers.dev/mcp",
+        "--header",
+        "X-Project-Id: YOUR_PROJECT_NAME",
+        "--header",
+        "Authorization: Bearer YOUR_AUTH_TOKEN"
+      ]
+    }
+  }
+}
+```
+
+To scope memory per user, add an `X-User-Id` header:
+
+```json
+"--header",
+"X-User-Id: YOUR_USER_ID"
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `memory_add_message` | Store a conversation message with automatic embedding |
+| `memory_search` | Semantic search across all memory types (cascading) |
+| `memory_get_context` | Build a unified context string from all memory |
+| `memory_add_entity` | Add an entity with automatic 3-stage deduplication |
+| `memory_add_preference` | Store a categorized preference |
+| `memory_add_fact` | Store a temporal fact (subject-predicate-object) |
+| `memory_start_trace` | Begin recording a reasoning trace |
+| `memory_promote_to_global` | Promote a memory item to user or global scope |
+
+### Claude Code Setup
+
+Copy the templates into your project to enable `/remember` and `/recall` slash commands:
+
+```bash
+cp templates/CLAUDE.md your-project/CLAUDE.md
+cp -r templates/.claude your-project/.claude
+```
+
+This gives your Claude Code sessions persistent memory backed by this service.
+
+## REST API
+
+All endpoints require `Authorization: Bearer <token>` and accept optional `X-Project-Id` (default: `"default"`) and `X-User-Id` (default: `"default"`) headers for scoping.
+
+### Projects & Users
+
+```
+POST   /api/v1/projects                    Create a project
+GET    /api/v1/projects                    List projects
+
+POST   /api/v1/users                       Create a user
+GET    /api/v1/users                       List users
+```
+
+### Sessions & Messages (Short-Term)
+
+```
+POST   /api/v1/sessions                    Create a session
+GET    /api/v1/sessions                    List sessions
+GET    /api/v1/sessions/:id                Get a session
+DELETE /api/v1/sessions/:id                Delete a session (cascading)
+
+POST   /api/v1/sessions/:id/messages       Add a message
+GET    /api/v1/sessions/:id/messages       Get conversation
+POST   /api/v1/sessions/:id/messages/batch Batch add messages
+POST   /api/v1/messages/search             Semantic message search
+```
+
+### Entities, Preferences & Facts (Long-Term)
+
+```
+POST   /api/v1/entities                    Add entity (with dedup)
+GET    /api/v1/entities/:id                Get entity
+PUT    /api/v1/entities/:id                Update entity
+DELETE /api/v1/entities/:id                Delete entity
+POST   /api/v1/entities/search             Semantic entity search
+
+POST   /api/v1/entities/:id/relations      Add a relation
+GET    /api/v1/entities/:id/relations      Get relations
+
+POST   /api/v1/preferences                 Add preference
+GET    /api/v1/preferences                 List preferences (?category=)
+POST   /api/v1/preferences/search          Semantic preference search
+
+POST   /api/v1/facts                       Add fact
+GET    /api/v1/facts                       List facts (?subject=&predicate=, auto-excludes expired)
+POST   /api/v1/facts/search               Semantic fact search
+PUT    /api/v1/facts/:id/invalidate        Soft-invalidate a fact
+```
+
+### Traces & Tool Calls (Procedural)
+
+```
+POST   /api/v1/traces                      Start a trace
+PUT    /api/v1/traces/:id/complete         Complete a trace
+GET    /api/v1/traces                      List traces (?session_id=&success=)
+POST   /api/v1/traces/search              Semantic trace search
+
+POST   /api/v1/traces/:traceId/steps       Add a reasoning step
+POST   /api/v1/steps/:stepId/tool-calls    Record a tool call
+GET    /api/v1/tool-stats                  Get tool usage statistics
+```
+
+### Context & Promotion
+
+```
+POST   /api/v1/context                     Build unified context from all memory types
+POST   /api/v1/promote                     Promote an item to user or global scope
+```
+
+## Example Usage
+
+### Store and retrieve a memory via REST
+
+```bash
+BASE="https://cf-agent-memory.YOUR_SUBDOMAIN.workers.dev"
+AUTH="Authorization: Bearer YOUR_TOKEN"
+PROJECT="X-Project-Id: my-project"
+
+# Create a session
+curl -X POST "$BASE/api/v1/sessions" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"id": "session-1"}'
+
+# Add a message
+curl -X POST "$BASE/api/v1/sessions/session-1/messages" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"role": "user", "content": "Remember that our API deadline is April 30"}'
+
+# Store as a fact
+curl -X POST "$BASE/api/v1/facts" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"subject": "API", "predicate": "deadline", "object": "2026-04-30", "valid_until": "2026-04-30"}'
+
+# Semantic search across all memory
+curl -X POST "$BASE/api/v1/messages/search" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"query": "when is the API due?"}'
+```
+
+### Entity deduplication
+
+```bash
+# First add
+curl -X POST "$BASE/api/v1/entities" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"name": "Cloudflare Workers", "entity_type": "OBJECT", "description": "Serverless platform"}'
+
+# Adding "Cloudflare Worker" (typo) returns the existing entity instead of creating a duplicate
+curl -X POST "$BASE/api/v1/entities" \
+  -H "$AUTH" -H "$PROJECT" -H "Content-Type: application/json" \
+  -d '{"name": "Cloudflare Worker", "entity_type": "OBJECT"}'
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR guidelines.
+
+## License
+
+[Apache 2.0](LICENSE)

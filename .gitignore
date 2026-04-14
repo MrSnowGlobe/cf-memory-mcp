@@ -1,0 +1,36 @@
+# Claude Code (root only — templates/ copies must be committed)
+/CLAUDE.md
+/cf-agent-memory-design.md
+/.claude/
+
+# Dependencies
+node_modules/
+
+# Cloudflare
+.wrangler/
+wrangler.toml
+
+# Environment & secrets
+.env
+.env.*
+.dev.vars
+/.mcp.json
+
+# Build
+dist/
+build/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
