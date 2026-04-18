@@ -40,6 +40,7 @@ import { getGraphSnapshot } from './memory/snapshot';
 import { getAtlas } from './memory/atlas';
 import { migrateNamespaces } from './admin/migrate-namespaces';
 import mcpServer from './mcp/server';
+import { scopeDoName } from './durable-objects/memory-events';
 
 const app = new Hono<AppType>();
 
@@ -546,6 +547,24 @@ app.post(
 app.get('/api/v1/atlas', async (c) => {
   const atlas = await getAtlas(c.env);
   return c.json(atlas);
+});
+
+// ===========================================================================
+// Live events — WebSocket subscribe. Per-scope DO fans out writes.
+// ===========================================================================
+
+app.get('/api/v1/events', async (c) => {
+  if (c.req.header('Upgrade') !== 'websocket') {
+    return c.json({ error: 'Expected WebSocket upgrade' }, 426);
+  }
+  if (!c.env.EVENTS) {
+    return c.json({ error: 'Events service not configured' }, 503);
+  }
+  const id = c.env.EVENTS.idFromName(
+    scopeDoName(c.get('projectId'), c.get('userId'))
+  );
+  const stub = c.env.EVENTS.get(id);
+  return stub.fetch(c.req.raw);
 });
 
 app.get('/api/v1/snapshot', async (c) => {

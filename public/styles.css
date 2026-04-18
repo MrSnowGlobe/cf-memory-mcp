@@ -1727,3 +1727,102 @@ input[type="range"]::-moz-range-thumb {
   .streams { grid-template-columns: 1fr; max-height: none; }
   body { padding: calc(var(--u) * 3) calc(var(--u) * 2); }
 }
+
+/* ============================================================
+   Live event indicator (masthead)
+   ============================================================ */
+
+.live {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px 6px 8px;
+  border: 1px solid var(--rule-warm);
+  border-radius: var(--r);
+  background: var(--inset);
+}
+.live__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.live__label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.live[data-state="connected"]    .live__dot {
+  background: var(--short);
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+.live[data-state="connected"]    .live__label { color: var(--short); }
+.live[data-state="connecting"]   .live__dot {
+  background: var(--hot);
+  animation: pulse-loading 1s linear infinite;
+}
+.live[data-state="connecting"]   .live__label { color: var(--hot); }
+.live[data-state="disconnected"] .live__dot { background: var(--failure); }
+.live[data-state="disconnected"] .live__label { color: var(--failure); }
+.live[data-state="off"] { opacity: 0.55; }
+
+@keyframes live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(143, 184, 146, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(143, 184, 146, 0); }
+}
+
+/* ============================================================
+   Fresh-item flash — shows when a live event brought in a new row
+   ============================================================ */
+
+@keyframes fresh-flash {
+  0%   { background: rgba(232, 185, 106, 0.18); box-shadow: inset 3px 0 0 var(--hot); }
+  60%  { background: rgba(232, 185, 106, 0.08); }
+  100% { background: transparent;                box-shadow: inset 3px 0 0 transparent; }
+}
+.message.is-fresh,
+.trace.is-fresh,
+.record-card.is-fresh {
+  animation: fresh-flash 3.2s ease-out both;
+  border-radius: var(--r);
+}
+
+/* ============================================================
+   Settings — live toggle
+   ============================================================ */
+
+.field--inline {
+  margin-top: 4px;
+}
+.toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  align-items: center;
+  cursor: pointer;
+  padding: 6px 0;
+}
+.toggle input {
+  grid-row: 1 / span 2;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--long);
+  align-self: center;
+}
+.toggle__label {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  text-transform: uppercase;
+}
+.toggle__hint {
+  grid-column: 2;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}

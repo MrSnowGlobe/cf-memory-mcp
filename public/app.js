@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   projectId: 'default',
   userId: 'default',
   token: 'dev-token',
+  live: true,
 };
 
 const ENTITY_TYPES = [
@@ -638,6 +639,8 @@ function bindSettings() {
     $('#setting-project').value = settings.projectId;
     $('#setting-user').value = settings.userId;
     $('#setting-token').value = settings.token;
+    const liveBox = $('#setting-live');
+    if (liveBox) liveBox.checked = settings.live;
     drawer.hidden = false;
     toggle.setAttribute('aria-expanded', 'true');
   }
@@ -650,15 +653,26 @@ function bindSettings() {
   cancel.addEventListener('click', close);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
+    const prevScope = `${settings.projectId}:${settings.userId}`;
+    const prevLive = settings.live;
     settings = {
       baseUrl: $('#setting-base-url').value.trim().replace(/\/$/, ''),
       projectId: $('#setting-project').value.trim() || 'default',
       userId: $('#setting-user').value.trim() || 'default',
       token: $('#setting-token').value,
+      live: $('#setting-live')?.checked ?? settings.live,
     };
     saveSettings(settings);
     updateScopeDisplay();
     close();
+
+    // Reconnect live events when scope changed or toggle flipped.
+    const scopeChanged = `${settings.projectId}:${settings.userId}` !== prevScope;
+    if (scopeChanged || settings.live !== prevLive) {
+      disconnectLiveEvents();
+      if (settings.live) connectLiveEvents();
+    }
+
     void refresh();
   });
 }
@@ -703,6 +717,10 @@ function renderStats(stats) {
 
 // ----- Streams (messages & traces) ------------------------------------------
 
+function freshClass(id) {
+  return liveState.freshIds.has(id) ? ' is-fresh' : '';
+}
+
 function renderMessages(messages) {
   const list = $('#stream-messages');
   $('#stream-messages-count').textContent = messages.length;
@@ -713,7 +731,7 @@ function renderMessages(messages) {
   }
   for (const m of messages) {
     list.append(
-      el('li', { class: 'message' }, [
+      el('li', { class: 'message' + freshClass(m.id) }, [
         el('span', { class: 'message__time' }, fmtTime(m.created_at)),
         el('span', { class: 'message__role', dataset: { role: m.role } }, m.role),
         el('span', { class: 'message__content' }, m.content),
@@ -733,7 +751,7 @@ function renderTraces(traces) {
   for (const t of traces) {
     const successKey = t.success === 1 ? '1' : t.success === 0 ? '0' : '-';
     list.append(
-      el('li', { class: 'trace' }, [
+      el('li', { class: 'trace' + freshClass(t.id) }, [
         el('span', { class: 'trace__time' }, fmtTime(t.started_at)),
         el('span', { class: 'trace__bullet', dataset: { success: successKey } }),
         el('span', { class: 'trace__task' }, t.task),
@@ -1099,7 +1117,7 @@ function emptyScopeCard(thing) {
 }
 
 function renderPreferenceCard(p) {
-  const card = el('li', { class: 'record-card', dataset: { flavor: 'pref', id: p.id } });
+  const card = el('li', { class: 'record-card' + freshClass(p.id), dataset: { flavor: 'pref', id: p.id } });
   card._render = () => {
     card.innerHTML = '';
     card.append(
@@ -1182,7 +1200,7 @@ function openPreferenceEdit(card, p) {
 }
 
 function renderFactCard(f) {
-  const card = el('li', { class: 'record-card', dataset: { flavor: 'fact', id: f.id } });
+  const card = el('li', { class: 'record-card' + freshClass(f.id), dataset: { flavor: 'fact', id: f.id } });
   card._render = () => {
     card.innerHTML = '';
     card.append(
@@ -1481,10 +1499,145 @@ function bindViewSwitch() {
   }
 }
 
+// ----- Live events (WebSocket) ----------------------------------------------
+
+/**
+ * Hold the WebSocket for `/api/v1/events`. One per scope. Auto-reconnects
+ * with exponential backoff up to 30s. Emits memory events to onMemoryEvent,
+ * which debounces a refresh and flashes new list items.
+ */
+const liveState = {
+  ws: null,
+  reconnectAttempts: 0,
+  reconnectTimer: null,
+  refreshTimer: null,
+  freshIds: new Set(),
+  manualClose: false,
+};
+
+function wsUrl(path) {
+  const base = settings.baseUrl || window.location.origin;
+  return base.replace(/^http/, 'ws') + path;
+}
+
+function updateLiveIndicator(state) {
+  const dot = $('#live-indicator');
+  if (!dot) return;
+  dot.dataset.state = state;
+  const label = {
+    connected: 'live',
+    connecting: 'connecting…',
+    disconnected: 'paused',
+    off: 'off',
+  }[state] || state;
+  dot.setAttribute('title', `Live events: ${label}`);
+  dot.setAttribute('aria-label', `Live events: ${label}`);
+}
+
+function connectLiveEvents() {
+  if (!settings.live) {
+    updateLiveIndicator('off');
+    return;
+  }
+  if (liveState.ws) return;
+  liveState.manualClose = false;
+  updateLiveIndicator('connecting');
+
+  let ws;
+  try {
+    ws = new WebSocket(wsUrl('/api/v1/events'));
+  } catch (err) {
+    console.error('[live] WebSocket construction failed:', err);
+    scheduleLiveReconnect();
+    return;
+  }
+  liveState.ws = ws;
+
+  ws.addEventListener('open', () => {
+    liveState.reconnectAttempts = 0;
+    updateLiveIndicator('connected');
+  });
+
+  ws.addEventListener('message', (msg) => {
+    let evt;
+    try {
+      evt = JSON.parse(msg.data);
+    } catch {
+      return;
+    }
+    if (evt.type === 'hello' || evt.type === 'pong') return;
+    onMemoryEvent(evt);
+  });
+
+  ws.addEventListener('close', () => {
+    liveState.ws = null;
+    if (liveState.manualClose) {
+      updateLiveIndicator('off');
+      return;
+    }
+    updateLiveIndicator('disconnected');
+    scheduleLiveReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    // Close handler fires next and drives reconnect.
+  });
+}
+
+function disconnectLiveEvents() {
+  liveState.manualClose = true;
+  if (liveState.reconnectTimer) {
+    clearTimeout(liveState.reconnectTimer);
+    liveState.reconnectTimer = null;
+  }
+  if (liveState.ws) {
+    try { liveState.ws.close(1000, 'user toggled off'); } catch {}
+    liveState.ws = null;
+  }
+  updateLiveIndicator('off');
+}
+
+function scheduleLiveReconnect() {
+  if (!settings.live || liveState.manualClose) return;
+  if (liveState.reconnectTimer) return;
+  const attempt = ++liveState.reconnectAttempts;
+  const delay = Math.min(30_000, 1000 * Math.pow(1.6, Math.min(attempt, 10)));
+  liveState.reconnectTimer = setTimeout(() => {
+    liveState.reconnectTimer = null;
+    connectLiveEvents();
+  }, delay);
+}
+
+/**
+ * React to a single server-pushed event: flash-mark the new id so the
+ * renderer can highlight it, and schedule a debounced refresh so the
+ * full UI converges on the server's state without per-event hand-rolled
+ * update logic for every panel.
+ */
+function onMemoryEvent(evt) {
+  const id = evt.payload?.id;
+  if (id) {
+    liveState.freshIds.add(id);
+    // Clear freshness tag after the flash animation duration.
+    setTimeout(() => liveState.freshIds.delete(id), 3500);
+  }
+  if (liveState.refreshTimer) return;
+  liveState.refreshTimer = setTimeout(() => {
+    liveState.refreshTimer = null;
+    void refresh({ silent: true });
+  }, 250);
+}
+
+function bindLiveToggle() {
+  const checkbox = $('#setting-live');
+  if (!checkbox) return;
+  checkbox.checked = settings.live;
+}
+
 // ----- Refresh / load -------------------------------------------------------
 
-async function refresh() {
-  setStatus('loading', 'fetching');
+async function refresh(opts = {}) {
+  if (!opts.silent) setStatus('loading', 'fetching');
   $('#empty-graph').hidden = true;
   try {
     // Snapshot covers the graph + stream tiers; full prefs/facts come from
@@ -1542,6 +1695,10 @@ async function init() {
     return;
   }
   hideLoginVeil();
+
+  bindLiveToggle();
+  updateLiveIndicator(settings.live ? 'connecting' : 'off');
+  connectLiveEvents();
 
   $('#refresh').addEventListener('click', () => void refresh());
 

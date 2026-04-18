@@ -18,6 +18,7 @@ import { parsePagination } from '../utils/pagination';
 import { getEmbedding } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
 import { vectorInsert, cascadingSearch, getWriteNamespace } from '../services/vectorize';
+import { publishEvent } from '../services/events';
 
 export class ProceduralMemory {
   constructor(
@@ -50,7 +51,7 @@ export class ProceduralMemory {
       )
       .run();
 
-    return {
+    const row: TraceRow = {
       id,
       project_id: this.projectId,
       user_id: this.userId,
@@ -65,6 +66,13 @@ export class ProceduralMemory {
       metadata: metaJson,
       vector_id: null,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'trace_started', {
+      id: row.id,
+      task: row.task,
+      session_id: row.session_id,
+      started_at: row.started_at,
+    });
+    return row;
   }
 
   async completeTrace(
@@ -103,7 +111,7 @@ export class ProceduralMemory {
     });
 
     // 5. Return the updated trace
-    return {
+    const row: TraceRow = {
       ...trace,
       outcome,
       success: successInt,
@@ -111,6 +119,14 @@ export class ProceduralMemory {
       duration_ms: durationMs,
       vector_id: id,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'trace_completed', {
+      id: row.id,
+      task: row.task,
+      outcome: row.outcome,
+      success: row.success === 1,
+      duration_ms: row.duration_ms,
+    });
+    return row;
   }
 
   async listTraces(opts?: TraceFilterInput): Promise<TraceRow[]> {

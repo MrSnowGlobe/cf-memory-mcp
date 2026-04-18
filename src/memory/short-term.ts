@@ -17,6 +17,7 @@ import {
   cascadingSearch,
   getWriteNamespace,
 } from '../services/vectorize';
+import { publishEvent } from '../services/events';
 
 export class ShortTermMemory {
   constructor(
@@ -156,7 +157,7 @@ export class ShortTermMemory {
       `session:${sessionId}:recent`
     );
 
-    return {
+    const row: MessageRow = {
       id,
       session_id: sessionId,
       role: role as MessageRow['role'],
@@ -166,6 +167,14 @@ export class ShortTermMemory {
       sequence_num: sequenceNum,
       vector_id: id,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'message_added', {
+      id: row.id,
+      session_id: row.session_id,
+      role: row.role,
+      content: row.content,
+      created_at: row.created_at,
+    });
+    return row;
   }
 
   async getConversation(

@@ -44,6 +44,17 @@ id = "YOUR_KV_NAMESPACE_ID"  # Run: npx wrangler kv namespace create CACHE
 [ai]
 binding = "AI"
 
+# Durable Object: per-scope WebSocket pub/sub for live memory events.
+# One DO per {project_id}:{user_id}. Uses WebSocket hibernation so duration
+# is only billed while handling messages, not while idle.
+[[durable_objects.bindings]]
+name = "EVENTS"
+class_name = "MemoryEventsDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MemoryEventsDO"]
+
 # Observatory visualizer — static assets served at the worker root.
 # /api/* and /mcp/* still hit the Hono router; everything else falls back
 # to ./public (with index.html as the SPA entry).
