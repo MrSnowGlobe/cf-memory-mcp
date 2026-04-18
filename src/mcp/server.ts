@@ -17,6 +17,8 @@ import {
   StartTraceSchema,
   PromoteRequestSchema,
   ContextRequestSchema,
+  AddRelationSchema,
+  TraverseRelationsSchema,
 } from '../utils/validation';
 
 // ---------------------------------------------------------------------------
@@ -182,6 +184,67 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
       required: ['type', 'id', 'reason'],
     },
   },
+  {
+    name: 'memory_add_relation',
+    description:
+      'Record a directed edge between two entities in the knowledge graph (e.g. Alice "knows" Bob). Complements memory_add_fact: prefer a relation when you want to traverse it later, prefer a fact when you want a time-bounded triple.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source_entity_id: {
+          type: 'string',
+          description: 'ID of the source entity (the edge origin).',
+        },
+        target_entity_id: {
+          type: 'string',
+          description: 'ID of the target entity (the edge destination).',
+        },
+        relation_type: {
+          type: 'string',
+          description:
+            'Verb-like label for the edge, e.g. "knows", "works_at", "depends_on". Lowercase snake_case recommended.',
+        },
+        relation_strength: {
+          type: 'number',
+          description: 'Optional weight in [0, 1]. Re-asserting an edge updates this value.',
+        },
+        metadata: { type: 'object', description: 'Optional arbitrary metadata.' },
+      },
+      required: ['source_entity_id', 'target_entity_id', 'relation_type'],
+    },
+  },
+  {
+    name: 'memory_traverse',
+    description:
+      'Walk the knowledge graph outward from a root entity. Returns each reachable entity once with its minimum hop distance. Use when semantic search is not enough and you need entities connected by specific relations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entity_id: { type: 'string', description: 'Root entity to walk from.' },
+        max_depth: {
+          type: 'number',
+          description: 'Hop count limit (1-4). Default 2.',
+        },
+        direction: {
+          type: 'string',
+          enum: ['out', 'in', 'both'],
+          description:
+            'Edge direction relative to root. "out" follows outgoing edges, "in" incoming, "both" ignores direction. Default "both".',
+        },
+        relation_types: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional allow-list of relation_type labels. When present, branches that do not match are pruned during recursion.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max entities returned (1-200). Default 50.',
+        },
+      },
+      required: ['entity_id'],
+    },
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -196,6 +259,14 @@ const SearchMcpSchema = z.object({
   query: z.string().min(1),
   types: z.array(z.enum(['messages', 'entities', 'preferences', 'facts', 'traces'])).optional(),
   limit: z.number().int().min(1).max(100).optional(),
+});
+
+const AddRelationMcpSchema = AddRelationSchema.extend({
+  source_entity_id: z.string().min(1).max(500),
+});
+
+const TraverseMcpSchema = TraverseRelationsSchema.extend({
+  entity_id: z.string().min(1).max(500),
 });
 
 function parseArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): T {
@@ -310,6 +381,27 @@ async function dispatchToolCall(
     case 'memory_promote_to_global': {
       const parsed = parseArgs(PromoteRequestSchema, args);
       return promote(env, projectId, userId, parsed.type, parsed.id, parsed.reason, parsed.target ?? 'global');
+    }
+
+    case 'memory_add_relation': {
+      const parsed = parseArgs(AddRelationMcpSchema, args);
+      return ltm(env, projectId, userId).addRelation(
+        parsed.source_entity_id,
+        parsed.target_entity_id,
+        parsed.relation_type,
+        parsed.metadata,
+        parsed.relation_strength
+      );
+    }
+
+    case 'memory_traverse': {
+      const parsed = parseArgs(TraverseMcpSchema, args);
+      return ltm(env, projectId, userId).traverseRelations(parsed.entity_id, {
+        maxDepth: parsed.max_depth,
+        relationTypes: parsed.relation_types,
+        direction: parsed.direction,
+        limit: parsed.limit,
+      });
     }
 
     default:
