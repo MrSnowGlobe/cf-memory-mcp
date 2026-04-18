@@ -27,6 +27,8 @@ import {
   getWriteNamespace,
 } from '../services/vectorize';
 import { resolveEntity } from '../services/resolution';
+import { traverseRelations, type TraverseOptions } from '../services/graph';
+import type { NeighborRow } from '../types';
 
 export class LongTermMemory {
   constructor(
@@ -246,19 +248,23 @@ export class LongTermMemory {
     sourceId: string,
     targetId: string,
     relationType: string,
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    strength: number = 1.0
   ): Promise<RelationRow> {
     const id = generateId();
     const now = new Date().toISOString();
     const metaJson = JSON.stringify(metadata ?? {});
 
+    // Re-asserting an edge refreshes its strength + metadata so callers can
+    // express "I saw this again, here's the latest weight."
     const row = await this.env.DB.prepare(
-      `INSERT INTO entity_relations (id, source_entity_id, target_entity_id, relation_type, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(source_entity_id, target_entity_id, relation_type) DO UPDATE SET id = id
+      `INSERT INTO entity_relations (id, source_entity_id, target_entity_id, relation_type, relation_strength, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source_entity_id, target_entity_id, relation_type)
+       DO UPDATE SET relation_strength = excluded.relation_strength, metadata = excluded.metadata
        RETURNING *`
     )
-      .bind(id, sourceId, targetId, relationType, metaJson, now)
+      .bind(id, sourceId, targetId, relationType, strength, metaJson, now)
       .first<RelationRow>();
 
     if (!row) {
@@ -275,6 +281,13 @@ export class LongTermMemory {
       .all<RelationRow>();
 
     return result.results;
+  }
+
+  async traverseRelations(
+    rootId: string,
+    opts?: TraverseOptions
+  ): Promise<NeighborRow[]> {
+    return traverseRelations(this.env, rootId, this.projectId, this.userId, opts);
   }
 
   // ---------------------------------------------------------------------------
