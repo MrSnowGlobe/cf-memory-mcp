@@ -33,6 +33,7 @@ import { LongTermMemory } from './memory/long-term';
 import { ProceduralMemory } from './memory/procedural';
 import { buildContext } from './memory/context';
 import { promote } from './memory/promotion';
+import { getGraphSnapshot } from './memory/snapshot';
 import { migrateNamespaces } from './admin/migrate-namespaces';
 import mcpServer from './mcp/server';
 
@@ -505,6 +506,22 @@ app.post(
     return c.json({ context });
   }
 );
+
+// ===========================================================================
+// Visualizer snapshot — single read-only bootstrap for the Observatory UI
+// ===========================================================================
+
+app.get('/api/v1/snapshot', async (c) => {
+  const num = (q: string | undefined): number | undefined =>
+    q !== undefined ? Number(q) : undefined;
+  const snapshot = await getGraphSnapshot(c.env, c.get('projectId'), c.get('userId'), {
+    entityLimit: num(c.req.query('entity_limit')),
+    relationLimit: num(c.req.query('relation_limit')),
+    messageLimit: num(c.req.query('message_limit')),
+    traceLimit: num(c.req.query('trace_limit')),
+  });
+  return c.json(snapshot);
+});
 
 // ===========================================================================
 // Admin — One-time migrations

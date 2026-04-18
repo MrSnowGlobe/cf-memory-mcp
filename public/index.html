@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Observatory · cf-agent-memory</title>
+    <meta name="description" content="A celestial chart for agent memory — entities, relations, and the three tiers of recall." />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0E1112" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..900,0..100,0..1;1,9..144,300..900,0..100,0..1&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+
+  <body>
+    <!-- Decorative grain + grid layers -->
+    <div class="bg-grain" aria-hidden="true"></div>
+    <div class="bg-grid" aria-hidden="true"></div>
+
+    <!-- Top corner ornaments — pure decoration, like a chart border -->
+    <div class="corner corner--tl" aria-hidden="true">
+      <span class="corner__mark">N 41° 12′</span>
+    </div>
+    <div class="corner corner--tr" aria-hidden="true">
+      <span class="corner__mark">W 73° 58′</span>
+    </div>
+    <div class="corner corner--bl" aria-hidden="true">
+      <span class="corner__mark">FOLIO IV</span>
+    </div>
+    <div class="corner corner--br" aria-hidden="true">
+      <span class="corner__mark" id="last-fetched">—</span>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Header                                                        -->
+    <!-- ============================================================ -->
+    <header class="masthead">
+      <div class="masthead__brand">
+        <span class="masthead__sigil" aria-hidden="true">
+          <svg viewBox="0 0 40 40" width="34" height="34">
+            <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="0.6" />
+            <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" stroke-width="0.6" stroke-dasharray="2 3" />
+            <circle cx="20" cy="20" r="4" fill="currentColor" />
+            <line x1="20" y1="2" x2="20" y2="8" stroke="currentColor" stroke-width="0.6" />
+            <line x1="20" y1="32" x2="20" y2="38" stroke="currentColor" stroke-width="0.6" />
+            <line x1="2" y1="20" x2="8" y2="20" stroke="currentColor" stroke-width="0.6" />
+            <line x1="32" y1="20" x2="38" y2="20" stroke="currentColor" stroke-width="0.6" />
+          </svg>
+        </span>
+        <div class="masthead__title">
+          <h1>
+            <span class="masthead__primary">Observatory</span>
+            <span class="masthead__divider">·</span>
+            <span class="masthead__secondary">cf&#8209;agent&#8209;memory</span>
+          </h1>
+          <p class="masthead__tag">A chart of what the agent remembers, in three tiers.</p>
+        </div>
+      </div>
+
+      <div class="masthead__instruments">
+        <div class="scope-display" id="scope-display" title="Active scope">
+          <span class="scope-display__label">scope</span>
+          <span class="scope-display__value">
+            <span data-scope-project>—</span>
+            <span class="scope-display__sep">/</span>
+            <span data-scope-user>—</span>
+          </span>
+        </div>
+
+        <div class="status" id="status" data-state="idle" title="Connection status">
+          <span class="status__dot"></span>
+          <span class="status__label">idle</span>
+        </div>
+
+        <button class="btn btn--ghost" id="refresh" title="Refresh snapshot (R)" aria-label="Refresh snapshot">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3M13.5 8a5.5 5.5 0 0 1-9.9 3.3M12.5 1.5v3h-3M3.5 14.5v-3h3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+
+        <button class="btn btn--ghost" id="settings-toggle" title="Configure scope &amp; auth (S)">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path
+              d="M8 1.2v1.6m0 10.4v1.6M3.2 3.2l1.1 1.1m7.4 7.4 1.1 1.1M1.2 8h1.6m10.4 0h1.6M3.2 12.8l1.1-1.1m7.4-7.4 1.1-1.1"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span>configure</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- ============================================================ -->
+    <!-- Settings drawer                                               -->
+    <!-- ============================================================ -->
+    <aside class="drawer" id="drawer" hidden>
+      <form class="drawer__form" id="settings-form">
+        <div class="drawer__heading">
+          <h2>Instrument calibration</h2>
+          <p>Tell the Observatory where to point. All values persist locally.</p>
+        </div>
+
+        <div class="field">
+          <label for="setting-base-url">Base URL</label>
+          <input
+            type="text"
+            id="setting-base-url"
+            placeholder="(blank = same origin)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span class="field__hint">e.g. http://localhost:8787 — leave blank when served by the worker itself.</span>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="setting-project">Project ID</label>
+            <input type="text" id="setting-project" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="setting-user">User ID</label>
+            <input type="text" id="setting-user" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="setting-token">Bearer token</label>
+          <input type="password" id="setting-token" autocomplete="off" spellcheck="false" />
+          <span class="field__hint">Sent as <code>Authorization: Bearer …</code> on every request.</span>
+        </div>
+
+        <div class="drawer__actions">
+          <button type="button" class="btn btn--ghost" id="settings-cancel">discard</button>
+          <button type="submit" class="btn btn--primary">apply &amp; refresh</button>
+        </div>
+      </form>
+    </aside>
+
+    <!-- ============================================================ -->
+    <!-- Stats strip                                                   -->
+    <!-- ============================================================ -->
+    <section class="stats" aria-label="Memory tier counts">
+      <article class="stat stat--long" data-tier="long">
+        <header class="stat__head">
+          <span class="stat__tier">long&#8209;term</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">entities</span>
+          <span class="stat__value" data-stat="entities">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">relations</span>
+          <span class="stat__value" data-stat="relations">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">facts</span>
+          <span class="stat__value" data-stat="facts">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">preferences</span>
+          <span class="stat__value" data-stat="preferences">0</span>
+        </div>
+      </article>
+
+      <article class="stat stat--short" data-tier="short">
+        <header class="stat__head">
+          <span class="stat__tier">short&#8209;term</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">sessions</span>
+          <span class="stat__value" data-stat="sessions">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">messages</span>
+          <span class="stat__value" data-stat="messages">0</span>
+        </div>
+      </article>
+
+      <article class="stat stat--proc" data-tier="proc">
+        <header class="stat__head">
+          <span class="stat__tier">procedural</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">traces</span>
+          <span class="stat__value" data-stat="traces">0</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Main composition: filters · graph · detail                    -->
+    <!-- ============================================================ -->
+    <main class="composition">
+      <!-- LEFT — Filters & search -->
+      <aside class="rail rail--left" aria-label="Filters">
+        <div class="rail__section">
+          <h3 class="rail__title">Search</h3>
+          <div class="search">
+            <input
+              type="search"
+              id="search-input"
+              placeholder="semantic search…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span class="search__hint">⌘K</span>
+          </div>
+        </div>
+
+        <div class="rail__section">
+          <h3 class="rail__title">Entity types</h3>
+          <ul class="legend" id="type-filters"></ul>
+        </div>
+
+        <div class="rail__section">
+          <h3 class="rail__title">Traversal</h3>
+          <div class="control">
+            <label for="traverse-depth">depth</label>
+            <input type="range" id="traverse-depth" min="1" max="3" step="1" value="2" />
+            <span class="control__value" id="traverse-depth-value">2</span>
+          </div>
+          <div class="control control--segments">
+            <label>direction</label>
+            <div class="segments" role="radiogroup" aria-label="Traversal direction">
+              <button type="button" class="segment is-active" data-dir="both" role="radio" aria-checked="true">both</button>
+              <button type="button" class="segment" data-dir="out" role="radio" aria-checked="false">out</button>
+              <button type="button" class="segment" data-dir="in" role="radio" aria-checked="false">in</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rail__section rail__section--quiet">
+          <p class="footnote">
+            <span class="footnote__lede">Click a node</span> to reveal its 1–3 hop neighbourhood. Hover an edge for its relation type.
+          </p>
+        </div>
+      </aside>
+
+      <!-- CENTER — The chart -->
+      <section class="chart" aria-label="Entity graph">
+        <div class="chart__frame">
+          <canvas id="graph" width="800" height="600"></canvas>
+          <div class="chart__overlay" id="graph-overlay">
+            <div class="empty" id="empty-graph" hidden>
+              <p class="empty__line">The observatory is dark.</p>
+              <p class="empty__sub">No entities are charted in this scope. Add one through the API to begin.</p>
+            </div>
+            <div class="loading" id="loading-graph">
+              <span class="loading__pulse"></span>
+              <span class="loading__label">listening to the worker…</span>
+            </div>
+          </div>
+          <div class="chart__legend" id="hover-legend" hidden></div>
+        </div>
+      </section>
+
+      <!-- RIGHT — Detail panel -->
+      <aside class="rail rail--right" aria-label="Selected entity">
+        <div class="detail" id="detail">
+          <div class="detail__placeholder">
+            <p class="detail__placeholder-line">No selection.</p>
+            <p class="detail__placeholder-sub">Pick a node from the chart to inspect its neighbourhood.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ============================================================ -->
+    <!-- Bottom strips: messages + traces                              -->
+    <!-- ============================================================ -->
+    <section class="streams" aria-label="Recent activity">
+      <article class="stream stream--short" data-tier="short">
+        <header class="stream__head">
+          <h3>
+            <span class="stream__tier">short&#8209;term</span>
+            recent transmissions
+          </h3>
+          <span class="stream__count" id="stream-messages-count">0</span>
+        </header>
+        <ol class="stream__body" id="stream-messages"></ol>
+      </article>
+
+      <article class="stream stream--proc" data-tier="proc">
+        <header class="stream__head">
+          <h3>
+            <span class="stream__tier">procedural</span>
+            reasoning traces
+          </h3>
+          <span class="stream__count" id="stream-traces-count">0</span>
+        </header>
+        <ol class="stream__body" id="stream-traces"></ol>
+      </article>
+    </section>
+
+    <!-- Toasts / system notices -->
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
