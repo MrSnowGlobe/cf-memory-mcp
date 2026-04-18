@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { zValidator } from '@hono/zod-validator';
 import type { AppType } from './types';
+import { HttpError } from './utils/errors';
 import { authMiddleware } from './middleware/auth';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
-import { generateId } from './utils/ids';
 import {
   CreateSessionSchema,
   AddMessageSchema,
@@ -29,11 +31,27 @@ import { ShortTermMemory } from './memory/short-term';
 import { LongTermMemory } from './memory/long-term';
 import { ProceduralMemory } from './memory/procedural';
 import { buildContext } from './memory/context';
-import { promoteToGlobal, promote } from './memory/promotion';
+import { promote } from './memory/promotion';
 import { migrateNamespaces } from './admin/migrate-namespaces';
 import mcpServer from './mcp/server';
 
 const app = new Hono<AppType>();
+
+// ---------------------------------------------------------------------------
+// Global error handler — maps typed errors to HTTP status codes.
+// ---------------------------------------------------------------------------
+
+app.onError((err, c) => {
+  if (err instanceof HttpError) {
+    return c.json({ error: err.message }, err.status as ContentfulStatusCode);
+  }
+  const message = err instanceof Error ? err.message : '';
+  if (message.includes('UNIQUE constraint')) {
+    return c.json({ error: 'Resource already exists' }, 409);
+  }
+  console.error('[router] unhandled error:', err);
+  return c.json({ error: 'Internal server error' }, 500);
+});
 
 // ---------------------------------------------------------------------------
 // Security headers on all responses
@@ -63,6 +81,15 @@ app.use('/mcp/*', authMiddleware);
 app.use('/mcp/*', projectScopeMiddleware);
 app.use('/mcp/*', userScopeMiddleware);
 
+// ---------------------------------------------------------------------------
+// Memory class factories
+// ---------------------------------------------------------------------------
+
+type Ctx = Context<AppType>;
+const stm = (c: Ctx) => new ShortTermMemory(c.env, c.get('projectId'), c.get('userId'));
+const ltm = (c: Ctx) => new LongTermMemory(c.env, c.get('projectId'), c.get('userId'));
+const pm = (c: Ctx) => new ProceduralMemory(c.env, c.get('projectId'), c.get('userId'));
+
 // ===========================================================================
 // Projects
 // ===========================================================================
@@ -71,88 +98,68 @@ app.post(
   '/api/v1/projects',
   zValidator('json', CreateProjectSchema),
   async (c) => {
-    try {
-      const body = c.req.valid('json');
-      const now = new Date().toISOString();
-      const metaJson = JSON.stringify(body.metadata ?? {});
+    const body = c.req.valid('json');
+    const now = new Date().toISOString();
+    const metaJson = JSON.stringify(body.metadata ?? {});
 
-      await c.env.DB.prepare(
-        'INSERT INTO projects (id, display_name, created_at, metadata) VALUES (?, ?, ?, ?)'
-      )
-        .bind(body.id, body.display_name ?? null, now, metaJson)
-        .run();
+    await c.env.DB.prepare(
+      'INSERT INTO projects (id, display_name, created_at, metadata) VALUES (?, ?, ?, ?)'
+    )
+      .bind(body.id, body.display_name ?? null, now, metaJson)
+      .run();
 
-      return c.json(
-        {
-          id: body.id,
-          display_name: body.display_name ?? null,
-          created_at: now,
-          metadata: metaJson,
-        },
-        201
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('UNIQUE constraint')) {
-        return c.json({ error: 'Project already exists' }, 409);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    return c.json(
+      {
+        id: body.id,
+        display_name: body.display_name ?? null,
+        created_at: now,
+        metadata: metaJson,
+      },
+      201
+    );
   }
 );
 
 app.get('/api/v1/projects', async (c) => {
-  try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM projects ORDER BY created_at DESC'
-    )
-      .all();
-    return c.json(result.results);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const result = await c.env.DB.prepare(
+    'SELECT * FROM projects ORDER BY created_at DESC'
+  ).all();
+  return c.json(result.results);
 });
 
 // ===========================================================================
 // Users
 // ===========================================================================
 
-// POST /api/v1/users - Create user
 app.post(
   '/api/v1/users',
   zValidator('json', CreateUserSchema),
   async (c) => {
-    try {
-      const body = c.req.valid('json');
-      const now = new Date().toISOString();
-      const metaJson = JSON.stringify(body.metadata ?? {});
-      await c.env.DB.prepare(
-        'INSERT INTO users (id, display_name, created_at, metadata) VALUES (?, ?, ?, ?)'
-      )
-        .bind(body.id, body.display_name ?? null, now, metaJson)
-        .run();
-      return c.json({ id: body.id, display_name: body.display_name ?? null, created_at: now, metadata: body.metadata ?? {} }, 201);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      if (msg.includes('UNIQUE constraint')) {
-        return c.json({ error: `User '${(c.req.valid('json') as { id: string }).id}' already exists` }, 409);
-      }
-      return c.json({ error: msg }, 500);
-    }
+    const body = c.req.valid('json');
+    const now = new Date().toISOString();
+    const metaJson = JSON.stringify(body.metadata ?? {});
+    await c.env.DB.prepare(
+      'INSERT INTO users (id, display_name, created_at, metadata) VALUES (?, ?, ?, ?)'
+    )
+      .bind(body.id, body.display_name ?? null, now, metaJson)
+      .run();
+    return c.json(
+      {
+        id: body.id,
+        display_name: body.display_name ?? null,
+        created_at: now,
+        metadata: body.metadata ?? {},
+      },
+      201
+    );
   }
 );
 
-// GET /api/v1/users - List users
 app.get('/api/v1/users', async (c) => {
-  try {
-    const result = await c.env.DB.prepare(
-      'SELECT * FROM users ORDER BY created_at DESC'
-    ).all();
-    return c.json(result.results);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    return c.json({ error: msg }, 500);
-  }
+  const result = await c.env.DB.prepare(
+    'SELECT * FROM users ORDER BY created_at DESC'
+  ).all();
+  return c.json(result.results);
 });
 
 // ===========================================================================
@@ -163,60 +170,30 @@ app.post(
   '/api/v1/sessions',
   zValidator('json', CreateSessionSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new ShortTermMemory(c.env, projectId, userId);
-      const session = await mem.createSession(body.id, body.metadata);
-      return c.json(session, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const session = await stm(c).createSession(body.id, body.metadata);
+    return c.json(session, 201);
   }
 );
 
 app.get('/api/v1/sessions', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-    const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
-    const mem = new ShortTermMemory(c.env, projectId, userId);
-    const sessions = await mem.listSessions({ limit, offset });
-    return c.json(sessions);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
+  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
+  const sessions = await stm(c).listSessions({ limit, offset });
+  return c.json(sessions);
 });
 
 app.get('/api/v1/sessions/:id', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const id = c.req.param('id');
-    const mem = new ShortTermMemory(c.env, projectId, userId);
-    const session = await mem.getSession(id);
-    if (!session) {
-      return c.json({ error: 'Session not found' }, 404);
-    }
-    return c.json(session);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
+  const session = await stm(c).getSession(c.req.param('id'));
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
   }
+  return c.json(session);
 });
 
 app.delete('/api/v1/sessions/:id', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const id = c.req.param('id');
-    const mem = new ShortTermMemory(c.env, projectId, userId);
-    await mem.deleteSession(id);
-    return c.body(null, 204);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  await stm(c).deleteSession(c.req.param('id'));
+  return c.body(null, 204);
 });
 
 // ===========================================================================
@@ -227,54 +204,30 @@ app.post(
   '/api/v1/sessions/:id/messages',
   zValidator('json', AddMessageSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const sessionId = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new ShortTermMemory(c.env, projectId, userId);
-      const message = await mem.addMessage(
-        sessionId,
-        body.role,
-        body.content,
-        body.metadata
-      );
-      return c.json(message, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const message = await stm(c).addMessage(
+      c.req.param('id'),
+      body.role,
+      body.content,
+      body.metadata
+    );
+    return c.json(message, 201);
   }
 );
 
 app.get('/api/v1/sessions/:id/messages', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const sessionId = c.req.param('id');
-    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-    const mem = new ShortTermMemory(c.env, projectId, userId);
-    const messages = await mem.getConversation(sessionId, limit);
-    return c.json(messages);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
+  const messages = await stm(c).getConversation(c.req.param('id'), limit);
+  return c.json(messages);
 });
 
 app.post(
   '/api/v1/sessions/:id/messages/batch',
   zValidator('json', BatchMessagesSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const sessionId = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new ShortTermMemory(c.env, projectId, userId);
-      const count = await mem.addMessagesBatch(sessionId, body.messages);
-      return c.json({ count }, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const count = await stm(c).addMessagesBatch(c.req.param('id'), body.messages);
+    return c.json({ count }, 201);
   }
 );
 
@@ -282,19 +235,12 @@ app.post(
   '/api/v1/messages/search',
   zValidator('json', SearchQuerySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new ShortTermMemory(c.env, projectId, userId);
-      const results = await mem.searchMessages(body.query, {
-        sessionId: body.session_id,
-        limit: body.limit,
-      });
-      return c.json(results);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const results = await stm(c).searchMessages(body.query, {
+      sessionId: body.session_id,
+      limit: body.limit,
+    });
+    return c.json(results);
   }
 );
 
@@ -306,84 +252,42 @@ app.post(
   '/api/v1/entities',
   zValidator('json', AddEntitySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const entity = await mem.addEntity(body);
-      return c.json(entity, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const entity = await ltm(c).addEntity(body);
+    return c.json(entity, 201);
   }
 );
 
 app.get('/api/v1/entities/:id', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const id = c.req.param('id');
-    const mem = new LongTermMemory(c.env, projectId, userId);
-    const entity = await mem.getEntity(id);
-    if (!entity) {
-      return c.json({ error: 'Entity not found' }, 404);
-    }
-    return c.json(entity);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
+  const entity = await ltm(c).getEntity(c.req.param('id'));
+  if (!entity) {
+    return c.json({ error: 'Entity not found' }, 404);
   }
+  return c.json(entity);
 });
 
 app.put(
   '/api/v1/entities/:id',
   zValidator('json', UpdateEntitySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const id = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const entity = await mem.updateEntity(id, body);
-      return c.json(entity);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('not found')) {
-        return c.json({ error: 'Resource not found' }, 404);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const entity = await ltm(c).updateEntity(c.req.param('id'), body);
+    return c.json(entity);
   }
 );
 
 app.delete('/api/v1/entities/:id', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const id = c.req.param('id');
-    const mem = new LongTermMemory(c.env, projectId, userId);
-    await mem.deleteEntity(id);
-    return c.body(null, 204);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  await ltm(c).deleteEntity(c.req.param('id'));
+  return c.body(null, 204);
 });
 
 app.post(
   '/api/v1/entities/search',
   zValidator('json', SearchQuerySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const results = await mem.searchEntities(body.query, body.limit);
-      return c.json(results);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const results = await ltm(c).searchEntities(body.query, body.limit);
+    return c.json(results);
   }
 );
 
@@ -391,36 +295,20 @@ app.post(
   '/api/v1/entities/:id/relations',
   zValidator('json', AddRelationSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const sourceId = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const relation = await mem.addRelation(
-        sourceId,
-        body.target_entity_id,
-        body.relation_type,
-        body.metadata
-      );
-      return c.json(relation, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const relation = await ltm(c).addRelation(
+      c.req.param('id'),
+      body.target_entity_id,
+      body.relation_type,
+      body.metadata
+    );
+    return c.json(relation, 201);
   }
 );
 
 app.get('/api/v1/entities/:id/relations', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const entityId = c.req.param('id');
-    const mem = new LongTermMemory(c.env, projectId, userId);
-    const relations = await mem.getRelations(entityId);
-    return c.json(relations);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const relations = await ltm(c).getRelations(c.req.param('id'));
+  return c.json(relations);
 });
 
 // ===========================================================================
@@ -431,46 +319,25 @@ app.post(
   '/api/v1/preferences',
   zValidator('json', AddPreferenceSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const preference = await mem.addPreference(body);
-      return c.json(preference, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const preference = await ltm(c).addPreference(body);
+    return c.json(preference, 201);
   }
 );
 
 app.get('/api/v1/preferences', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const category = c.req.query('category');
-    const mem = new LongTermMemory(c.env, projectId, userId);
-    const preferences = await mem.listPreferences(category);
-    return c.json(preferences);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const category = c.req.query('category');
+  const preferences = await ltm(c).listPreferences(category);
+  return c.json(preferences);
 });
 
 app.post(
   '/api/v1/preferences/search',
   zValidator('json', SearchQuerySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const results = await mem.searchPreferences(body.query, body.limit);
-      return c.json(results);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const results = await ltm(c).searchPreferences(body.query, body.limit);
+    return c.json(results);
   }
 );
 
@@ -482,47 +349,26 @@ app.post(
   '/api/v1/facts',
   zValidator('json', AddFactSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const fact = await mem.addFact(body);
-      return c.json(fact, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const fact = await ltm(c).addFact(body);
+    return c.json(fact, 201);
   }
 );
 
 app.get('/api/v1/facts', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const subject = c.req.query('subject');
-    const predicate = c.req.query('predicate');
-    const mem = new LongTermMemory(c.env, projectId, userId);
-    const facts = await mem.listFacts({ subject, predicate });
-    return c.json(facts);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const subject = c.req.query('subject');
+  const predicate = c.req.query('predicate');
+  const facts = await ltm(c).listFacts({ subject, predicate });
+  return c.json(facts);
 });
 
 app.post(
   '/api/v1/facts/search',
   zValidator('json', SearchQuerySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      const results = await mem.searchFacts(body.query, body.limit);
-      return c.json(results);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const results = await ltm(c).searchFacts(body.query, body.limit);
+    return c.json(results);
   }
 );
 
@@ -530,21 +376,9 @@ app.put(
   '/api/v1/facts/:id/invalidate',
   zValidator('json', InvalidateFactSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const id = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new LongTermMemory(c.env, projectId, userId);
-      await mem.invalidateFact(id, body.valid_until);
-      return c.json({ success: true });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('not found')) {
-        return c.json({ error: 'Resource not found' }, 404);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    await ltm(c).invalidateFact(c.req.param('id'), body.valid_until);
+    return c.json({ success: true });
   }
 );
 
@@ -556,16 +390,9 @@ app.post(
   '/api/v1/traces',
   zValidator('json', StartTraceSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new ProceduralMemory(c.env, projectId, userId);
-      const trace = await mem.startTrace(body);
-      return c.json(trace, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const trace = await pm(c).startTrace(body);
+    return c.json(trace, 201);
   }
 );
 
@@ -573,62 +400,31 @@ app.put(
   '/api/v1/traces/:id/complete',
   zValidator('json', CompleteTraceSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const id = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new ProceduralMemory(c.env, projectId, userId);
-      const trace = await mem.completeTrace(id, body.outcome, body.success);
-      return c.json(trace);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('not found')) {
-        return c.json({ error: 'Resource not found' }, 404);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const trace = await pm(c).completeTrace(c.req.param('id'), body.outcome, body.success);
+    return c.json(trace);
   }
 );
 
 app.get('/api/v1/traces', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-    const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
-    const sessionId = c.req.query('session_id');
-    const successParam = c.req.query('success');
-    const success =
-      successParam === 'true' ? true : successParam === 'false' ? false : undefined;
+  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
+  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
+  const sessionId = c.req.query('session_id');
+  const successParam = c.req.query('success');
+  const success =
+    successParam === 'true' ? true : successParam === 'false' ? false : undefined;
 
-    const mem = new ProceduralMemory(c.env, projectId, userId);
-    const traces = await mem.listTraces({
-      limit,
-      offset,
-      session_id: sessionId,
-      success,
-    });
-    return c.json(traces);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const traces = await pm(c).listTraces({ limit, offset, session_id: sessionId, success });
+  return c.json(traces);
 });
 
 app.post(
   '/api/v1/traces/search',
   zValidator('json', SearchQuerySchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const mem = new ProceduralMemory(c.env, projectId, userId);
-      const results = await mem.searchTraces(body.query, body.limit);
-      return c.json(results);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const results = await pm(c).searchTraces(body.query, body.limit);
+    return c.json(results);
   }
 );
 
@@ -640,21 +436,9 @@ app.post(
   '/api/v1/traces/:id/steps',
   zValidator('json', AddStepSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const traceId = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new ProceduralMemory(c.env, projectId, userId);
-      const step = await mem.addStep(traceId, body);
-      return c.json(step, 201);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('not found')) {
-        return c.json({ error: 'Resource not found' }, 404);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const step = await pm(c).addStep(c.req.param('id'), body);
+    return c.json(step, 201);
   }
 );
 
@@ -662,30 +446,15 @@ app.post(
   '/api/v1/steps/:id/tool-calls',
   zValidator('json', RecordToolCallSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const stepId = c.req.param('id');
-      const body = c.req.valid('json');
-      const mem = new ProceduralMemory(c.env, projectId, userId);
-      const toolCall = await mem.recordToolCall(stepId, body);
-      return c.json(toolCall, 201);
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const toolCall = await pm(c).recordToolCall(c.req.param('id'), body);
+    return c.json(toolCall, 201);
   }
 );
 
 app.get('/api/v1/tool-stats', async (c) => {
-  try {
-    const projectId = c.get('projectId');
-    const userId = c.get('userId');
-    const mem = new ProceduralMemory(c.env, projectId, userId);
-    const stats = await mem.getToolStats();
-    return c.json(stats);
-  } catch {
-    return c.json({ error: 'Internal server error' }, 500);
-  }
+  const stats = await pm(c).getToolStats();
+  return c.json(stats);
 });
 
 // ===========================================================================
@@ -696,27 +465,17 @@ app.post(
   '/api/v1/promote',
   zValidator('json', PromoteRequestSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const result = await promote(
-        c.env,
-        projectId,
-        userId,
-        body.type,
-        body.id,
-        body.reason,
-        body.target ?? 'global'
-      );
-      return c.json(result, 201);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('not found')) {
-        return c.json({ error: 'Resource not found' }, 404);
-      }
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const result = await promote(
+      c.env,
+      c.get('projectId'),
+      c.get('userId'),
+      body.type,
+      body.id,
+      body.reason,
+      body.target ?? 'global'
+    );
+    return c.json(result, 201);
   }
 );
 
@@ -724,15 +483,9 @@ app.post(
   '/api/v1/context',
   zValidator('json', ContextRequestSchema),
   async (c) => {
-    try {
-      const projectId = c.get('projectId');
-      const userId = c.get('userId');
-      const body = c.req.valid('json');
-      const context = await buildContext(c.env, projectId, userId, body);
-      return c.json({ context });
-    } catch {
-      return c.json({ error: 'Internal server error' }, 500);
-    }
+    const body = c.req.valid('json');
+    const context = await buildContext(c.env, c.get('projectId'), c.get('userId'), body);
+    return c.json({ context });
   }
 );
 
@@ -741,13 +494,8 @@ app.post(
 // ===========================================================================
 
 app.post('/api/v1/admin/migrate-namespaces', async (c) => {
-  try {
-    const result = await migrateNamespaces(c.env);
-    return c.json(result);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Migration failed';
-    return c.json({ error: message }, 500);
-  }
+  const result = await migrateNamespaces(c.env);
+  return c.json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -758,8 +506,6 @@ app.route('/mcp', mcpServer);
 
 // ---------------------------------------------------------------------------
 // Catch-all: return JSON 404 for any unmatched routes.
-// Without this, Cloudflare returns HTML "404 Not Found" which breaks
-// MCP clients that probe OAuth discovery endpoints (.well-known/*).
 // ---------------------------------------------------------------------------
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));

@@ -13,6 +13,7 @@ import type {
   TraceFilterInput,
 } from '../utils/validation';
 import { generateId } from '../utils/ids';
+import { NotFoundError } from '../utils/errors';
 import { parsePagination } from '../utils/pagination';
 import { getEmbedding } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
@@ -79,9 +80,7 @@ export class ProceduralMemory {
       .first<TraceRow>();
 
     if (!trace) {
-      throw new Error(
-        `Trace ${id} not found in project ${this.projectId}`
-      );
+      throw new NotFoundError(`Trace ${id}`);
     }
 
     // 2. Calculate completion fields
@@ -170,9 +169,7 @@ export class ProceduralMemory {
       .first<{ id: string }>();
 
     if (!trace) {
-      throw new Error(
-        `Trace ${traceId} not found in project ${this.projectId}`
-      );
+      throw new NotFoundError(`Trace ${traceId}`);
     }
 
     // 2. Get next step_number
@@ -231,9 +228,7 @@ export class ProceduralMemory {
       .first<{ id: string }>();
 
     if (!step) {
-      throw new Error(
-        `Step ${stepId} not found in project ${this.projectId}`
-      );
+      throw new NotFoundError(`Step ${stepId}`);
     }
 
     const id = generateId();

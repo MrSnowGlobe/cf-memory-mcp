@@ -1,4 +1,5 @@
 import type { SearchResult } from '../types';
+import { CASCADE_BOOSTS } from '../config';
 
 /**
  * Compute the most-specific write namespace for a given project+user pair.
@@ -41,6 +42,7 @@ export async function vectorDelete(
 
 export interface CascadeOpts {
   preferenceDedup?: boolean;
+  filter?: Record<string, string>;
 }
 
 /**
@@ -64,32 +66,31 @@ export async function cascadingSearch(
   const hasProject = projectId !== 'global';
 
   if (hasProject && hasUser) {
-    // Full 4-tier cascade
-    tiers.push({ namespace: `${projectId}:${userId}`, boost: 0.15, scopeLevel: 0, topK });
-    tiers.push({ namespace: `user:${userId}`, boost: 0.10, scopeLevel: 1, topK });
-    tiers.push({ namespace: projectId, boost: 0.05, scopeLevel: 2, topK: Math.ceil(topK / 2) });
-    tiers.push({ namespace: 'global', boost: 0.0, scopeLevel: 3, topK: Math.ceil(topK / 2) });
+    tiers.push({ namespace: `${projectId}:${userId}`, boost: CASCADE_BOOSTS.projectUser, scopeLevel: 0, topK });
+    tiers.push({ namespace: `user:${userId}`, boost: CASCADE_BOOSTS.user, scopeLevel: 1, topK });
+    tiers.push({ namespace: projectId, boost: CASCADE_BOOSTS.project, scopeLevel: 2, topK: Math.ceil(topK / 2) });
+    tiers.push({ namespace: 'global', boost: CASCADE_BOOSTS.global, scopeLevel: 3, topK: Math.ceil(topK / 2) });
   } else if (hasProject) {
-    // Project + global (no specific user)
-    tiers.push({ namespace: projectId, boost: 0.05, scopeLevel: 2, topK });
-    tiers.push({ namespace: 'global', boost: 0.0, scopeLevel: 3, topK: Math.ceil(topK / 2) });
+    tiers.push({ namespace: projectId, boost: CASCADE_BOOSTS.project, scopeLevel: 2, topK });
+    tiers.push({ namespace: 'global', boost: CASCADE_BOOSTS.global, scopeLevel: 3, topK: Math.ceil(topK / 2) });
   } else if (hasUser) {
-    // User + global (no specific project)
-    tiers.push({ namespace: `user:${userId}`, boost: 0.10, scopeLevel: 1, topK });
-    tiers.push({ namespace: 'global', boost: 0.0, scopeLevel: 3, topK: Math.ceil(topK / 2) });
+    tiers.push({ namespace: `user:${userId}`, boost: CASCADE_BOOSTS.user, scopeLevel: 1, topK });
+    tiers.push({ namespace: 'global', boost: CASCADE_BOOSTS.global, scopeLevel: 3, topK: Math.ceil(topK / 2) });
   } else {
-    // Global only
-    tiers.push({ namespace: 'global', boost: 0.0, scopeLevel: 3, topK });
+    tiers.push({ namespace: 'global', boost: CASCADE_BOOSTS.global, scopeLevel: 3, topK });
   }
 
-  // Fire all queries in parallel
   const tierResults = await Promise.all(
     tiers.map(async (tier) => {
-      const results = await index.query(queryEmbedding, {
+      const queryOpts: VectorizeQueryOptions = {
         topK: tier.topK,
         namespace: tier.namespace,
         returnMetadata: 'all',
-      });
+      };
+      if (opts?.filter) {
+        queryOpts.filter = opts.filter;
+      }
+      const results = await index.query(queryEmbedding, queryOpts);
       return { tier, matches: results.matches ?? [] };
     })
   );

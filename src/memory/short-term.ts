@@ -7,6 +7,7 @@ import type {
 } from '../types';
 import type { AddMessageInput } from '../utils/validation';
 import { generateId } from '../utils/ids';
+import { NotFoundError } from '../utils/errors';
 import { parsePagination } from '../utils/pagination';
 import { getEmbedding, getEmbeddings } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
@@ -113,50 +114,41 @@ export class ShortTermMemory {
     content: string,
     metadata?: Record<string, unknown>
   ): Promise<MessageRow> {
-    // 1. Verify session exists and belongs to this project
     const session = await this.getSession(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found in project ${this.projectId}`);
+      throw new NotFoundError(`Session ${sessionId}`);
     }
 
-    // 2. Get next sequence_num
-    const seqResult = await this.env.DB.prepare(
-      'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM messages WHERE session_id = ?'
-    )
-      .bind(sessionId)
-      .first<{ next_seq: number }>();
-
-    const sequenceNum = seqResult?.next_seq ?? 1;
-
-    // 3. Generate message ID
     const id = generateId();
     const now = new Date().toISOString();
     const metaJson = JSON.stringify(metadata ?? {});
-
-    // 4. Generate embedding
     const embedding = await getEmbedding(content, this.env.AI);
 
-    // 5. Insert message into D1
-    await this.env.DB.prepare(
-      'INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-      .bind(id, sessionId, role, content, metaJson, now, sequenceNum, id)
-      .run();
-
-    // 6. Insert vector into Vectorize with scoped namespace
-    await vectorInsert(this.env.VEC_MESSAGES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
-      session_id: sessionId,
+    const sequenceNum = await this.insertMessageWithRetry(
+      id,
+      sessionId,
       role,
-    });
+      content,
+      metaJson,
+      now
+    );
 
-    // 7. Update session updated_at
+    try {
+      await vectorInsert(this.env.VEC_MESSAGES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
+        session_id: sessionId,
+        role,
+      });
+    } catch (err) {
+      console.error('[short-term] vector insert failed for message', id, err);
+      throw err;
+    }
+
     await this.env.DB.prepare(
       'UPDATE sessions SET updated_at = ? WHERE id = ?'
     )
       .bind(now, sessionId)
       .run();
 
-    // 8. Invalidate KV cache for this session's recent messages
     await cacheDelete(
       this.env.CACHE,
       this.projectId,
@@ -164,7 +156,6 @@ export class ShortTermMemory {
       `session:${sessionId}:recent`
     );
 
-    // 9. Return the message row
     return {
       id,
       session_id: sessionId,
@@ -184,7 +175,7 @@ export class ShortTermMemory {
     // Verify session belongs to this project
     const session = await this.getSession(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found in project ${this.projectId}`);
+      throw new NotFoundError(`Session ${sessionId}`);
     }
 
     // 1. Try KV cache first
@@ -223,7 +214,7 @@ export class ShortTermMemory {
     // 1. Verify session exists
     const session = await this.getSession(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found in project ${this.projectId}`);
+      throw new NotFoundError(`Session ${sessionId}`);
     }
 
     // 2. Get current max sequence_num
@@ -311,26 +302,53 @@ export class ShortTermMemory {
     opts?: { sessionId?: string; limit?: number }
   ): Promise<SearchResult[]> {
     const limit = opts?.limit ?? 10;
-
-    // 1. Generate embedding for the query
     const embedding = await getEmbedding(query, this.env.AI);
 
-    // 2. Cascading search across project + global namespaces
-    const results = await cascadingSearch(
+    const filter = opts?.sessionId ? { session_id: opts.sessionId } : undefined;
+
+    return cascadingSearch(
       this.env.VEC_MESSAGES,
       embedding,
       this.projectId,
       this.userId,
-      limit
+      limit,
+      filter ? { filter } : undefined
     );
+  }
 
-    // 3. If sessionId filter is provided, filter to only matching results
-    if (opts?.sessionId) {
-      return results.filter(
-        (r) => r.metadata?.session_id === opts.sessionId
-      );
+  private async insertMessageWithRetry(
+    id: string,
+    sessionId: string,
+    role: string,
+    content: string,
+    metaJson: string,
+    now: string
+  ): Promise<number> {
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const seqResult = await this.env.DB.prepare(
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM messages WHERE session_id = ?'
+      )
+        .bind(sessionId)
+        .first<{ next_seq: number }>();
+
+      const sequenceNum = seqResult?.next_seq ?? 1;
+
+      try {
+        await this.env.DB.prepare(
+          'INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+          .bind(id, sessionId, role, content, metaJson, now, sequenceNum, id)
+          .run();
+        return sequenceNum;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.includes('UNIQUE constraint') && attempt < MAX_ATTEMPTS - 1) {
+          continue;
+        }
+        throw err;
+      }
     }
-
-    return results;
+    throw new Error(`Failed to insert message after ${MAX_ATTEMPTS} attempts`);
   }
 }
