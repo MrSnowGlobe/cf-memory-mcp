@@ -11,6 +11,8 @@ import type {
   UpdateEntityInput,
   AddPreferenceInput,
   AddFactInput,
+  UpdatePreferenceInput,
+  UpdateFactInput,
 } from '../utils/validation';
 import { generateId } from '../utils/ids';
 import { NotFoundError } from '../utils/errors';
@@ -371,6 +373,87 @@ export class LongTermMemory {
     return result.results;
   }
 
+  async updatePreference(
+    id: string,
+    updates: UpdatePreferenceInput
+  ): Promise<PreferenceRow> {
+    const existing = await this.env.DB.prepare(
+      'SELECT * FROM preferences WHERE id = ? AND project_id = ? AND user_id = ?'
+    )
+      .bind(id, this.projectId, this.userId)
+      .first<PreferenceRow>();
+
+    if (!existing) {
+      throw new NotFoundError(`Preference ${id}`);
+    }
+
+    const setClauses: string[] = [];
+    const bindValues: (string | number | null)[] = [];
+
+    if (updates.category !== undefined) {
+      setClauses.push('category = ?');
+      bindValues.push(updates.category);
+    }
+    if (updates.preference !== undefined) {
+      setClauses.push('preference = ?');
+      bindValues.push(updates.preference);
+    }
+    if (updates.context !== undefined) {
+      setClauses.push('context = ?');
+      bindValues.push(updates.context);
+    }
+    if (updates.confidence !== undefined) {
+      setClauses.push('confidence = ?');
+      bindValues.push(updates.confidence);
+    }
+    if (updates.metadata !== undefined) {
+      setClauses.push('metadata = ?');
+      bindValues.push(JSON.stringify(updates.metadata));
+    }
+
+    const now = new Date().toISOString();
+    setClauses.push('updated_at = ?');
+    bindValues.push(now);
+
+    const sql = `UPDATE preferences SET ${setClauses.join(', ')} WHERE id = ? AND project_id = ? AND user_id = ?`;
+    bindValues.push(id, this.projectId, this.userId);
+
+    await this.env.DB.prepare(sql).bind(...bindValues).run();
+
+    const searchableChanged =
+      updates.category !== undefined ||
+      updates.preference !== undefined ||
+      updates.context !== undefined;
+
+    if (searchableChanged && existing.vector_id) {
+      const newCategory = updates.category ?? existing.category;
+      const newPreference = updates.preference ?? existing.preference;
+      const newContext = updates.context !== undefined ? updates.context : existing.context;
+      const embedding = await getEmbedding(
+        preferenceEmbeddingText(newCategory, newPreference, newContext),
+        this.env.AI
+      );
+      await vectorDelete(this.env.VEC_PREFERENCES, [existing.vector_id]);
+      await vectorInsert(
+        this.env.VEC_PREFERENCES,
+        id,
+        embedding,
+        getWriteNamespace(this.projectId, this.userId),
+        { category: newCategory }
+      );
+    }
+
+    return {
+      ...existing,
+      category: updates.category ?? existing.category,
+      preference: updates.preference ?? existing.preference,
+      context: updates.context !== undefined ? updates.context : existing.context,
+      confidence: updates.confidence ?? existing.confidence,
+      metadata: updates.metadata !== undefined ? JSON.stringify(updates.metadata) : existing.metadata,
+      updated_at: now,
+    };
+  }
+
   async searchPreferences(
     query: string,
     limit: number = 10
@@ -491,6 +574,97 @@ export class LongTermMemory {
       this.userId,
       limit
     );
+  }
+
+  async updateFact(id: string, updates: UpdateFactInput): Promise<FactRow> {
+    const existing = await this.env.DB.prepare(
+      'SELECT * FROM facts WHERE id = ? AND project_id = ? AND user_id = ?'
+    )
+      .bind(id, this.projectId, this.userId)
+      .first<FactRow>();
+
+    if (!existing) {
+      throw new NotFoundError(`Fact ${id}`);
+    }
+
+    const setClauses: string[] = [];
+    const bindValues: (string | number | null)[] = [];
+
+    if (updates.subject !== undefined) {
+      setClauses.push('subject = ?');
+      bindValues.push(updates.subject);
+    }
+    if (updates.predicate !== undefined) {
+      setClauses.push('predicate = ?');
+      bindValues.push(updates.predicate);
+    }
+    if (updates.object !== undefined) {
+      setClauses.push('object = ?');
+      bindValues.push(updates.object);
+    }
+    if (updates.valid_from !== undefined) {
+      setClauses.push('valid_from = ?');
+      bindValues.push(updates.valid_from);
+    }
+    if (updates.valid_until !== undefined) {
+      setClauses.push('valid_until = ?');
+      bindValues.push(updates.valid_until);
+    }
+    if (updates.confidence !== undefined) {
+      setClauses.push('confidence = ?');
+      bindValues.push(updates.confidence);
+    }
+    if (updates.source !== undefined) {
+      setClauses.push('source = ?');
+      bindValues.push(updates.source);
+    }
+    if (updates.metadata !== undefined) {
+      setClauses.push('metadata = ?');
+      bindValues.push(JSON.stringify(updates.metadata));
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    const sql = `UPDATE facts SET ${setClauses.join(', ')} WHERE id = ? AND project_id = ? AND user_id = ?`;
+    bindValues.push(id, this.projectId, this.userId);
+    await this.env.DB.prepare(sql).bind(...bindValues).run();
+
+    const searchableChanged =
+      updates.subject !== undefined ||
+      updates.predicate !== undefined ||
+      updates.object !== undefined;
+
+    if (searchableChanged && existing.vector_id) {
+      const newSubject = updates.subject ?? existing.subject;
+      const newPredicate = updates.predicate ?? existing.predicate;
+      const newObject = updates.object ?? existing.object;
+      const embedding = await getEmbedding(
+        factEmbeddingText(newSubject, newPredicate, newObject),
+        this.env.AI
+      );
+      await vectorDelete(this.env.VEC_FACTS, [existing.vector_id]);
+      await vectorInsert(
+        this.env.VEC_FACTS,
+        id,
+        embedding,
+        getWriteNamespace(this.projectId, this.userId),
+        { subject: newSubject, predicate: newPredicate }
+      );
+    }
+
+    return {
+      ...existing,
+      subject: updates.subject ?? existing.subject,
+      predicate: updates.predicate ?? existing.predicate,
+      object: updates.object ?? existing.object,
+      valid_from: updates.valid_from !== undefined ? updates.valid_from : existing.valid_from,
+      valid_until: updates.valid_until !== undefined ? updates.valid_until : existing.valid_until,
+      confidence: updates.confidence ?? existing.confidence,
+      source: updates.source !== undefined ? updates.source : existing.source,
+      metadata: updates.metadata !== undefined ? JSON.stringify(updates.metadata) : existing.metadata,
+    };
   }
 
   async invalidateFact(id: string, validUntil?: string): Promise<void> {

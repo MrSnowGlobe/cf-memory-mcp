@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Observatory · cf-agent-memory</title>
+    <meta name="description" content="A celestial chart for agent memory — entities, relations, and the three tiers of recall." />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0E1112" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300..700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+
+  <body>
+    <!-- Subtle background grid -->
+    <div class="bg-grid" aria-hidden="true"></div>
+
+    <!-- ============================================================ -->
+    <!-- Login overlay (covers everything until the cookie is valid)   -->
+    <!-- ============================================================ -->
+    <div class="login-veil" id="login-veil" hidden>
+      <form class="login-card" id="login-form" autocomplete="off">
+        <h2 class="login-card__title">Observatory</h2>
+        <p class="login-card__sub">Enter the password to access this memory store.</p>
+        <div class="login-card__field">
+          <label for="login-password">Password</label>
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            autocomplete="current-password"
+            spellcheck="false"
+            required
+            autofocus
+          />
+        </div>
+        <p class="login-card__error" id="login-error" hidden></p>
+        <button type="submit" class="btn btn--primary login-card__submit" id="login-submit">sign in</button>
+      </form>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Header                                                        -->
+    <!-- ============================================================ -->
+    <header class="masthead">
+      <div class="masthead__title">
+        <h1>
+          <span class="masthead__primary" data-title-primary>Observatory</span>
+          <span class="masthead__secondary">cf&#8209;agent&#8209;memory</span>
+        </h1>
+      </div>
+
+      <nav class="view-switch" role="tablist" aria-label="View">
+        <button type="button" class="view-switch__btn is-active" data-view="observatory" role="tab" aria-selected="true">Observatory</button>
+        <button type="button" class="view-switch__btn" data-view="atlas" role="tab" aria-selected="false">Atlas</button>
+      </nav>
+
+      <div class="masthead__instruments">
+        <div class="scope-display" id="scope-display" title="Active scope">
+          <span class="scope-display__label">scope</span>
+          <span class="scope-display__value">
+            <span data-scope-project>—</span>
+            <span class="scope-display__sep">/</span>
+            <span data-scope-user>—</span>
+          </span>
+        </div>
+
+        <div class="status" id="status" data-state="idle" title="Connection status">
+          <span class="status__dot"></span>
+          <span class="status__label">idle</span>
+        </div>
+
+        <button class="btn btn--ghost" id="refresh" title="Refresh snapshot (R)" aria-label="Refresh snapshot">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3M13.5 8a5.5 5.5 0 0 1-9.9 3.3M12.5 1.5v3h-3M3.5 14.5v-3h3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+
+        <button class="btn btn--ghost" id="logout-btn" title="Sign out" hidden>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3M10 11l3-3-3-3M13 8H6"
+              fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>sign out</span>
+        </button>
+        <button class="btn btn--ghost" id="settings-toggle" title="Configure scope &amp; auth (S)" aria-expanded="false" aria-controls="drawer">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path
+              d="M8 1.2v1.6m0 10.4v1.6M3.2 3.2l1.1 1.1m7.4 7.4 1.1 1.1M1.2 8h1.6m10.4 0h1.6M3.2 12.8l1.1-1.1m7.4-7.4 1.1-1.1"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span>configure</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- ============================================================ -->
+    <!-- Settings drawer                                               -->
+    <!-- ============================================================ -->
+    <aside class="drawer" id="drawer" hidden>
+      <form class="drawer__form" id="settings-form">
+        <div class="drawer__heading">
+          <h2>Instrument calibration</h2>
+          <p>Tell the Observatory where to point. All values persist locally.</p>
+        </div>
+
+        <div class="field">
+          <label for="setting-base-url">Base URL</label>
+          <input
+            type="text"
+            id="setting-base-url"
+            placeholder="(blank = same origin)"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span class="field__hint">e.g. http://localhost:8787 — leave blank when served by the worker itself.</span>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="setting-project">Project ID</label>
+            <input type="text" id="setting-project" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="setting-user">User ID</label>
+            <input type="text" id="setting-user" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="setting-token">Bearer token</label>
+          <input type="password" id="setting-token" autocomplete="off" spellcheck="false" />
+          <span class="field__hint">Sent as <code>Authorization: Bearer …</code> on every request.</span>
+        </div>
+
+        <div class="drawer__actions">
+          <button type="button" class="btn btn--ghost" id="settings-cancel">discard</button>
+          <button type="submit" class="btn btn--primary">apply &amp; refresh</button>
+        </div>
+      </form>
+    </aside>
+
+    <!-- ============================================================ -->
+    <!-- Observatory view (default)                                    -->
+    <!-- ============================================================ -->
+    <div class="view view--observatory" data-view-pane="observatory">
+
+    <!-- Stats strip -->
+    <section class="stats" aria-label="Memory tier counts">
+      <article class="stat stat--long" data-tier="long">
+        <header class="stat__head">
+          <span class="stat__tier">long&#8209;term</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">entities</span>
+          <span class="stat__value" data-stat="entities">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">relations</span>
+          <span class="stat__value" data-stat="relations">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">facts</span>
+          <span class="stat__value" data-stat="facts">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">preferences</span>
+          <span class="stat__value" data-stat="preferences">0</span>
+        </div>
+      </article>
+
+      <article class="stat stat--short" data-tier="short">
+        <header class="stat__head">
+          <span class="stat__tier">short&#8209;term</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">sessions</span>
+          <span class="stat__value" data-stat="sessions">0</span>
+        </div>
+        <div class="stat__row">
+          <span class="stat__label">messages</span>
+          <span class="stat__value" data-stat="messages">0</span>
+        </div>
+      </article>
+
+      <article class="stat stat--proc" data-tier="proc">
+        <header class="stat__head">
+          <span class="stat__tier">procedural</span>
+          <span class="stat__rule" aria-hidden="true"></span>
+        </header>
+        <div class="stat__row">
+          <span class="stat__label">traces</span>
+          <span class="stat__value" data-stat="traces">0</span>
+        </div>
+      </article>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Main composition: filters · graph · detail                    -->
+    <!-- ============================================================ -->
+    <main class="composition">
+      <!-- LEFT — Filters & search -->
+      <aside class="rail rail--left" aria-label="Filters">
+        <div class="rail__section">
+          <h3 class="rail__title">Search</h3>
+          <div class="search">
+            <input
+              type="search"
+              id="search-input"
+              placeholder="semantic search…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <span class="search__hint">⌘K</span>
+          </div>
+        </div>
+
+        <div class="rail__section">
+          <h3 class="rail__title">Entity types</h3>
+          <ul class="legend" id="type-filters"></ul>
+        </div>
+
+        <div class="rail__section">
+          <h3 class="rail__title">Traversal</h3>
+          <div class="control">
+            <label for="traverse-depth">depth</label>
+            <input type="range" id="traverse-depth" min="1" max="3" step="1" value="2" />
+            <span class="control__value" id="traverse-depth-value">2</span>
+          </div>
+          <div class="control control--segments">
+            <label>direction</label>
+            <div class="segments" role="radiogroup" aria-label="Traversal direction">
+              <button type="button" class="segment is-active" data-dir="both" role="radio" aria-checked="true">both</button>
+              <button type="button" class="segment" data-dir="out" role="radio" aria-checked="false">out</button>
+              <button type="button" class="segment" data-dir="in" role="radio" aria-checked="false">in</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rail__section rail__section--quiet">
+          <p class="footnote">
+            <span class="footnote__lede">Click a node</span> to reveal its 1–3 hop neighbourhood. Hover an edge for its relation type.
+          </p>
+        </div>
+      </aside>
+
+      <!-- CENTER — The chart -->
+      <section class="chart" aria-label="Entity graph">
+        <div class="chart__frame">
+          <canvas id="graph" width="800" height="600"></canvas>
+          <div class="chart__overlay" id="graph-overlay">
+            <div class="empty" id="empty-graph" hidden>
+              <p class="empty__line">No entities in this scope.</p>
+              <p class="empty__sub">Add one through the API to begin.</p>
+            </div>
+          </div>
+          <div class="chart__legend" id="hover-legend" hidden></div>
+        </div>
+      </section>
+
+      <!-- RIGHT — Detail panel -->
+      <aside class="rail rail--right" aria-label="Selected entity">
+        <div class="detail" id="detail">
+          <div class="detail__placeholder">
+            <p class="detail__placeholder-line">No selection.</p>
+            <p class="detail__placeholder-sub">Pick a node from the chart to inspect its neighbourhood.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ============================================================ -->
+    <!-- Bottom strips: messages + traces                              -->
+    <!-- ============================================================ -->
+    <section class="streams" aria-label="Recent activity">
+      <article class="stream stream--short" data-tier="short">
+        <header class="stream__head">
+          <h3>
+            <span class="stream__tier">short&#8209;term</span>
+            messages
+          </h3>
+          <span class="stream__count" id="stream-messages-count">0</span>
+        </header>
+        <ol class="stream__body" id="stream-messages"></ol>
+      </article>
+
+      <article class="stream stream--proc" data-tier="proc">
+        <header class="stream__head">
+          <h3>
+            <span class="stream__tier">procedural</span>
+            traces
+          </h3>
+          <span class="stream__count" id="stream-traces-count">0</span>
+        </header>
+        <ol class="stream__body" id="stream-traces"></ol>
+      </article>
+    </section>
+
+    <!-- Long-term records (preferences + facts), inline below streams -->
+    <section class="records" aria-label="Long-term records">
+      <div class="records__column">
+        <header class="records__head">
+          <h2>Preferences</h2>
+          <span class="records__count" id="records-prefs-count">0</span>
+        </header>
+        <div class="records__search">
+          <input
+            type="search"
+            id="search-prefs"
+            placeholder="filter preferences…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Filter preferences"
+          />
+        </div>
+        <ul class="records__list" id="records-prefs"></ul>
+      </div>
+
+      <div class="records__column">
+        <header class="records__head">
+          <h2>Facts</h2>
+          <span class="records__count" id="records-facts-count">0</span>
+        </header>
+        <div class="records__search">
+          <input
+            type="search"
+            id="search-facts"
+            placeholder="filter facts…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Filter facts"
+          />
+        </div>
+        <ul class="records__list" id="records-facts"></ul>
+      </div>
+    </section>
+
+    </div><!-- /.view--observatory -->
+
+    <!-- ============================================================ -->
+    <!-- Atlas view (projects + users directory)                       -->
+    <!-- ============================================================ -->
+    <div class="view view--atlas" data-view-pane="atlas" hidden>
+      <section class="atlas" aria-label="Global atlas">
+        <div class="atlas__column">
+          <header class="atlas__head">
+            <h2>Projects</h2>
+            <span class="atlas__count" id="atlas-projects-count">0</span>
+          </header>
+          <p class="atlas__hint">Click any project to scope the Observatory to it.</p>
+          <ul class="cards" id="atlas-projects"></ul>
+        </div>
+
+        <div class="atlas__column">
+          <header class="atlas__head">
+            <h2>Users</h2>
+            <span class="atlas__count" id="atlas-users-count">0</span>
+          </header>
+          <p class="atlas__hint">Click a user to set the Observatory's user scope.</p>
+          <ul class="cards" id="atlas-users"></ul>
+        </div>
+      </section>
+    </div><!-- /.view--atlas -->
+
+
+    <!-- Toasts / system notices -->
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

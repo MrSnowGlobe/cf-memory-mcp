@@ -9,6 +9,8 @@ export interface Bindings {
   CACHE: KVNamespace;
   AI: Ai;
   AUTH_TOKEN: string;
+  /** Password for the Observatory browser login. Empty = browser auth disabled. */
+  OBSERVATORY_PASSWORD?: string;
   EMBEDDING_MODEL: string;
   EMBEDDING_DIMENSIONS: string;
 }

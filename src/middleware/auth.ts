@@ -1,5 +1,6 @@
 import { createMiddleware } from 'hono/factory';
 import type { AppType } from '../types';
+import { hasValidSession } from '../auth/session';
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) {
@@ -12,18 +13,27 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.subtle.timingSafeEqual(encoder.encode(a), encoder.encode(b));
 }
 
+/**
+ * Accept either a valid bearer token (service-to-service) or a valid
+ * Observatory session cookie (browser login). Order matters: bearer is
+ * checked first because it's the cheaper path — pure string compare,
+ * no HMAC verification.
+ */
 export const authMiddleware = createMiddleware<AppType>(async (c, next) => {
   const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    c.header('WWW-Authenticate', 'Bearer');
-    return c.json({ error: 'Unauthorized' }, 401);
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    if (timingSafeEqual(token, c.env.AUTH_TOKEN)) {
+      await next();
+      return;
+    }
   }
 
-  const token = authHeader.slice(7);
-  if (!timingSafeEqual(token, c.env.AUTH_TOKEN)) {
-    c.header('WWW-Authenticate', 'Bearer');
-    return c.json({ error: 'Unauthorized' }, 401);
+  if (await hasValidSession(c)) {
+    await next();
+    return;
   }
 
-  await next();
+  c.header('WWW-Authenticate', 'Bearer');
+  return c.json({ error: 'Unauthorized' }, 401);
 });
