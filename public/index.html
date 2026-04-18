@@ -11,7 +11,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,300..900,0..100,0..1;1,9..144,300..900,0..100,0..1&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300..700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap"
       rel="stylesheet"
     />
 
@@ -23,15 +23,44 @@
     <div class="bg-grid" aria-hidden="true"></div>
 
     <!-- ============================================================ -->
+    <!-- Login overlay (covers everything until the cookie is valid)   -->
+    <!-- ============================================================ -->
+    <div class="login-veil" id="login-veil" hidden>
+      <form class="login-card" id="login-form" autocomplete="off">
+        <h2 class="login-card__title">Observatory</h2>
+        <p class="login-card__sub">Enter the password to access this memory store.</p>
+        <div class="login-card__field">
+          <label for="login-password">Password</label>
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            autocomplete="current-password"
+            spellcheck="false"
+            required
+            autofocus
+          />
+        </div>
+        <p class="login-card__error" id="login-error" hidden></p>
+        <button type="submit" class="btn btn--primary login-card__submit" id="login-submit">sign in</button>
+      </form>
+    </div>
+
+    <!-- ============================================================ -->
     <!-- Header                                                        -->
     <!-- ============================================================ -->
     <header class="masthead">
       <div class="masthead__title">
         <h1>
-          <span class="masthead__primary">Observatory</span>
+          <span class="masthead__primary" data-title-primary>Observatory</span>
           <span class="masthead__secondary">cf&#8209;agent&#8209;memory</span>
         </h1>
       </div>
+
+      <nav class="view-switch" role="tablist" aria-label="View">
+        <button type="button" class="view-switch__btn is-active" data-view="observatory" role="tab" aria-selected="true">Observatory</button>
+        <button type="button" class="view-switch__btn" data-view="atlas" role="tab" aria-selected="false">Atlas</button>
+      </nav>
 
       <div class="masthead__instruments">
         <div class="scope-display" id="scope-display" title="Active scope">
@@ -61,7 +90,14 @@
           </svg>
         </button>
 
-        <button class="btn btn--ghost" id="settings-toggle" title="Configure scope &amp; auth (S)">
+        <button class="btn btn--ghost" id="logout-btn" title="Sign out" hidden>
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3M10 11l3-3-3-3M13 8H6"
+              fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>sign out</span>
+        </button>
+        <button class="btn btn--ghost" id="settings-toggle" title="Configure scope &amp; auth (S)" aria-expanded="false" aria-controls="drawer">
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
             <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2" />
             <path
@@ -123,8 +159,11 @@
     </aside>
 
     <!-- ============================================================ -->
-    <!-- Stats strip                                                   -->
+    <!-- Observatory view (default)                                    -->
     <!-- ============================================================ -->
+    <div class="view view--observatory" data-view-pane="observatory">
+
+    <!-- Stats strip -->
     <section class="stats" aria-label="Memory tier counts">
       <article class="stat stat--long" data-tier="long">
         <header class="stat__head">
@@ -254,17 +293,6 @@
     <!-- Bottom strips: messages + traces                              -->
     <!-- ============================================================ -->
     <section class="streams" aria-label="Recent activity">
-      <article class="stream stream--long" data-tier="long">
-        <header class="stream__head">
-          <h3>
-            <span class="stream__tier">long&#8209;term</span>
-            records
-          </h3>
-          <span class="stream__count" id="stream-records-count">0</span>
-        </header>
-        <ol class="stream__body" id="stream-records"></ol>
-      </article>
-
       <article class="stream stream--short" data-tier="short">
         <header class="stream__head">
           <h3>
@@ -287,6 +315,73 @@
         <ol class="stream__body" id="stream-traces"></ol>
       </article>
     </section>
+
+    <!-- Long-term records (preferences + facts), inline below streams -->
+    <section class="records" aria-label="Long-term records">
+      <div class="records__column">
+        <header class="records__head">
+          <h2>Preferences</h2>
+          <span class="records__count" id="records-prefs-count">0</span>
+        </header>
+        <div class="records__search">
+          <input
+            type="search"
+            id="search-prefs"
+            placeholder="filter preferences…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Filter preferences"
+          />
+        </div>
+        <ul class="records__list" id="records-prefs"></ul>
+      </div>
+
+      <div class="records__column">
+        <header class="records__head">
+          <h2>Facts</h2>
+          <span class="records__count" id="records-facts-count">0</span>
+        </header>
+        <div class="records__search">
+          <input
+            type="search"
+            id="search-facts"
+            placeholder="filter facts…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="Filter facts"
+          />
+        </div>
+        <ul class="records__list" id="records-facts"></ul>
+      </div>
+    </section>
+
+    </div><!-- /.view--observatory -->
+
+    <!-- ============================================================ -->
+    <!-- Atlas view (projects + users directory)                       -->
+    <!-- ============================================================ -->
+    <div class="view view--atlas" data-view-pane="atlas" hidden>
+      <section class="atlas" aria-label="Global atlas">
+        <div class="atlas__column">
+          <header class="atlas__head">
+            <h2>Projects</h2>
+            <span class="atlas__count" id="atlas-projects-count">0</span>
+          </header>
+          <p class="atlas__hint">Click any project to scope the Observatory to it.</p>
+          <ul class="cards" id="atlas-projects"></ul>
+        </div>
+
+        <div class="atlas__column">
+          <header class="atlas__head">
+            <h2>Users</h2>
+            <span class="atlas__count" id="atlas-users-count">0</span>
+          </header>
+          <p class="atlas__hint">Click a user to set the Observatory's user scope.</p>
+          <ul class="cards" id="atlas-users"></ul>
+        </div>
+      </section>
+    </div><!-- /.view--atlas -->
+
 
     <!-- Toasts / system notices -->
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

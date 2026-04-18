@@ -52,18 +52,103 @@ let settings = loadSettings();
 async function api(path, opts = {}) {
   const url = (settings.baseUrl || '') + path;
   const headers = {
-    'Authorization': `Bearer ${settings.token}`,
     'X-Project-Id': settings.projectId,
     'X-User-Id': settings.userId,
     ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
     ...(opts.headers || {}),
   };
-  const res = await fetch(url, { ...opts, headers });
+  // Send bearer if user explicitly set one — useful for cross-origin / service paths
+  if (settings.token) headers['Authorization'] = `Bearer ${settings.token}`;
+  const res = await fetch(url, {
+    ...opts,
+    headers,
+    credentials: 'same-origin',  // include the session cookie when same-origin
+  });
+  if (res.status === 401) {
+    showLoginVeil();
+    throw new Error('Session expired — please sign in again');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`${res.status} ${res.statusText} — ${text || path}`);
   }
   return res.json();
+}
+
+// ----- Auth (browser session) -----------------------------------------------
+
+async function checkAuth() {
+  try {
+    const res = await fetch((settings.baseUrl || '') + '/auth/me', { credentials: 'same-origin' });
+    if (!res.ok) return { authenticated: false, password_required: true };
+    return res.json();
+  } catch {
+    return { authenticated: false, password_required: true };
+  }
+}
+
+function showLoginVeil() {
+  $('#login-veil').hidden = false;
+  $('#logout-btn').hidden = true;
+  $('#login-error').hidden = true;
+  setTimeout(() => $('#login-password')?.focus(), 50);
+}
+
+function hideLoginVeil() {
+  $('#login-veil').hidden = true;
+  $('#logout-btn').hidden = false;
+}
+
+async function attemptLogin(password) {
+  const errBox = $('#login-error');
+  const submit = $('#login-submit');
+  errBox.hidden = true;
+  submit.disabled = true;
+  try {
+    const res = await fetch((settings.baseUrl || '') + '/auth/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      errBox.textContent = data.error || `${res.status} ${res.statusText}`;
+      errBox.hidden = false;
+      return false;
+    }
+    return true;
+  } catch (err) {
+    errBox.textContent = err.message;
+    errBox.hidden = false;
+    return false;
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function attemptLogout() {
+  try {
+    await fetch((settings.baseUrl || '') + '/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+  } catch { /* ignore */ }
+  showLoginVeil();
+}
+
+function bindLogin() {
+  $('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pw = $('#login-password').value;
+    const ok = await attemptLogin(pw);
+    if (ok) {
+      $('#login-password').value = '';
+      hideLoginVeil();
+      void refresh();
+    }
+  });
+  $('#logout-btn').addEventListener('click', () => void attemptLogout());
 }
 
 // ----- DOM helpers ----------------------------------------------------------
@@ -531,6 +616,8 @@ function escapeHtml(s) {
 
 const state = {
   snapshot: null,
+  atlas: null,
+  view: 'observatory',
   typeCounts: {},
   enabledTypes: new Set(ENTITY_TYPES),
   traversal: { depth: 2, direction: 'both' },
@@ -552,8 +639,12 @@ function bindSettings() {
     $('#setting-user').value = settings.userId;
     $('#setting-token').value = settings.token;
     drawer.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
   }
-  function close() { drawer.hidden = true; }
+  function close() {
+    drawer.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+  }
 
   toggle.addEventListener('click', () => (drawer.hidden ? open() : close()));
   cancel.addEventListener('click', close);
@@ -612,49 +703,12 @@ function renderStats(stats) {
 
 // ----- Streams (messages & traces) ------------------------------------------
 
-function renderRecords(preferences, facts) {
-  const list = $('#stream-records');
-  const total = preferences.length + facts.length;
-  $('#stream-records-count').textContent = total;
-  list.innerHTML = '';
-  if (total === 0) {
-    list.append(el('li', { class: 'stream__empty' }, 'No long-term records yet.'));
-    return;
-  }
-  // Interleave by recency. Preferences use updated_at, facts use created_at.
-  const items = [
-    ...preferences.map((p) => ({ kind: 'pref', when: p.updated_at, row: p })),
-    ...facts.map((f) => ({ kind: 'fact', when: f.created_at, row: f })),
-  ].sort((a, b) => (a.when < b.when ? 1 : -1));
-
-  for (const item of items) {
-    const body = el('span', { class: 'record__body' });
-    if (item.kind === 'pref') {
-      body.append(
-        el('strong', {}, item.row.category),
-        document.createTextNode(item.row.preference)
-      );
-    } else {
-      body.append(
-        el('strong', {}, item.row.predicate),
-        document.createTextNode(`${item.row.subject} → ${item.row.object}`)
-      );
-    }
-    list.append(
-      el('li', { class: 'record' }, [
-        el('span', { class: 'record__kind', dataset: { kind: item.kind } }, item.kind),
-        body,
-      ])
-    );
-  }
-}
-
 function renderMessages(messages) {
   const list = $('#stream-messages');
   $('#stream-messages-count').textContent = messages.length;
   list.innerHTML = '';
   if (!messages.length) {
-    list.append(el('li', { class: 'stream__empty' }, 'No transmissions yet.'));
+    list.append(emptyStreamCard('messages'));
     return;
   }
   for (const m of messages) {
@@ -673,7 +727,7 @@ function renderTraces(traces) {
   $('#stream-traces-count').textContent = traces.length;
   list.innerHTML = '';
   if (!traces.length) {
-    list.append(el('li', { class: 'stream__empty' }, 'No reasoning traces recorded.'));
+    list.append(emptyStreamCard('traces'));
     return;
   }
   for (const t of traces) {
@@ -698,7 +752,16 @@ async function selectEntity(node) {
   const card = el('div', { class: 'detail-card' });
 
   const color = TYPE_COLORS[node.entity_type] || '#8B8170';
-  card.append(el('div', { class: 'detail-card__type', style: `--type: ${color}` }, node.entity_type));
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${color}` }, node.entity_type),
+      el('button', {
+        type: 'button',
+        class: 'record-card__edit',
+        onClick: () => openEntityEdit(card, node),
+      }, 'edit'),
+    ])
+  );
   card.append(el('h2', { class: 'detail-card__name' }, node.name));
 
   const meta = el('dl', { class: 'detail-card__meta' });
@@ -805,6 +868,54 @@ async function selectEntity(node) {
   }
 }
 
+function openEntityEdit(card, entity) {
+  card.classList.add('is-editing');
+  card.innerHTML = '';
+  const form = el('form', {
+    class: 'record-edit',
+    onSubmit: async (e) => {
+      e.preventDefault();
+      const updates = {
+        name: form.name.value.trim(),
+        subtype: form.subtype.value.trim() || null,
+        description: form.description.value.trim() || null,
+      };
+      try {
+        const updated = await api(`/api/v1/entities/${encodeURIComponent(entity.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(updates),
+        });
+        Object.assign(entity, updated);
+        // Update the in-graph copy too so the label re-renders
+        const local = graph.byId.get(entity.id);
+        if (local) {
+          local.name = updated.name;
+          local.description = updated.description;
+        }
+        showToast('entity updated', 'success');
+        await selectEntity(entity); // re-render the panel
+      } catch (err) {
+        showToast(err.message);
+      }
+    },
+  });
+
+  form.append(
+    field('name', 'name', entity.name),
+    field('subtype', 'subtype (optional)', entity.subtype ?? ''),
+    fieldText('description', 'description', entity.description ?? ''),
+    el('div', { class: 'record-edit__actions' }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost',
+        onClick: () => { card.classList.remove('is-editing'); selectEntity(entity); },
+      }, 'cancel'),
+      el('button', { type: 'submit', class: 'btn btn--primary' }, 'save'),
+    ])
+  );
+  card.append(form);
+}
+
 // ----- Search ---------------------------------------------------------------
 
 let searchTimer = null;
@@ -855,13 +966,535 @@ function bindTraversal() {
   }
 }
 
+// ----- Long-term records (preferences + facts) ------------------------------
+
+function renderRecordsView(preferences, facts) {
+  state.preferences = preferences;
+  state.facts = facts;
+  applyRecordsFilter('prefs');
+  applyRecordsFilter('facts');
+}
+
+/**
+ * Re-render either the preferences or facts list, applying the current
+ * search filter. Called on initial render AND on every keystroke in the
+ * search input — cheap because we only ever paint visible cards.
+ */
+function applyRecordsFilter(which) {
+  const isPref = which === 'prefs';
+  const all = isPref ? state.preferences ?? [] : state.facts ?? [];
+  const list = $(isPref ? '#records-prefs' : '#records-facts');
+  const countNode = $(isPref ? '#records-prefs-count' : '#records-facts-count');
+  const input = $(isPref ? '#search-prefs' : '#search-facts');
+  const query = input?.value ?? '';
+
+  const matched = all.filter((row) => matchesQuery(query, isPref ? prefSearchText(row) : factSearchText(row)));
+
+  list.innerHTML = '';
+
+  if (query) {
+    countNode.dataset.filtered = 'true';
+    countNode.dataset.shown = String(matched.length);
+    countNode.dataset.total = String(all.length);
+    countNode.textContent = '';
+  } else {
+    delete countNode.dataset.filtered;
+    countNode.textContent = String(all.length);
+  }
+
+  if (!all.length) {
+    list.append(emptyScopeCard(isPref ? 'preferences' : 'facts'));
+    return;
+  }
+
+  if (!matched.length) {
+    list.append(
+      el('li', { class: 'records__empty' }, [
+        el('p', { style: 'margin: 0;' }, [
+          'Nothing matches ',
+          el('code', { style: 'color: var(--hot); font-style: normal;' }, query),
+          '.',
+        ]),
+      ])
+    );
+    return;
+  }
+
+  for (const row of matched) {
+    list.append(isPref ? renderPreferenceCard(row) : renderFactCard(row));
+  }
+}
+
+function prefSearchText(p) {
+  return [p.category, p.preference, p.context ?? ''].join(' ').toLowerCase();
+}
+
+function factSearchText(f) {
+  return [f.subject, f.predicate, f.object, f.source ?? ''].join(' ').toLowerCase();
+}
+
+/**
+ * Multi-token "fuzzy" filter: every whitespace-split token of the query
+ * must appear as a case-insensitive substring somewhere in the haystack.
+ * Empty query matches everything.
+ */
+function matchesQuery(query, haystack) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const tokens = q.split(/\s+/);
+  return tokens.every((t) => haystack.includes(t));
+}
+
+function bindRecordsSearch() {
+  const debounce = (fn, ms) => {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  };
+  const onPrefs = debounce(() => applyRecordsFilter('prefs'), 100);
+  const onFacts = debounce(() => applyRecordsFilter('facts'), 100);
+  $('#search-prefs')?.addEventListener('input', onPrefs);
+  $('#search-facts')?.addEventListener('input', onFacts);
+}
+
+function emptyStreamCard(thing) {
+  const wrap = el('li', { class: 'stream__empty' });
+  wrap.append(
+    el('div', { style: 'margin-bottom: 4px;' }, [
+      'No ', thing, ' in ',
+      el('code', { style: 'color: var(--long); font-style: normal;' }, settings.projectId),
+      ' / ',
+      el('code', { style: 'color: var(--short); font-style: normal;' }, settings.userId),
+      '.',
+    ]),
+    el('div', { style: 'font-size: 11px;' }, [
+      el('button', {
+        style: 'background:none;border:none;color:var(--long);font-style:italic;cursor:pointer;padding:0;text-decoration:underline;text-decoration-color:var(--rule-warm);text-underline-offset:3px;font-family:inherit;font-size:inherit;',
+        onClick: () => { switchView('atlas'); void loadAtlas(); },
+      }, 'Open Atlas →'),
+    ])
+  );
+  return wrap;
+}
+
+function emptyScopeCard(thing) {
+  const wrap = el('li', { class: 'records__empty' });
+  wrap.append(
+    el('p', { style: 'margin: 0 0 8px;' }, [
+      'No ', thing, ' in scope ',
+      el('code', { style: 'font-style: normal; color: var(--long);' }, settings.projectId),
+      ' / ',
+      el('code', { style: 'font-style: normal; color: var(--short);' }, settings.userId),
+      '.'
+    ]),
+    el('p', { style: 'margin: 0; font-size: 12px;' }, [
+      'Open the ',
+      el('button', {
+        style: 'background:none;border:none;color:var(--long);font-style:italic;cursor:pointer;padding:0;text-decoration:underline;text-decoration-color:var(--rule-warm);text-underline-offset:3px;font-family:inherit;font-size:inherit;',
+        onClick: () => { switchView('atlas'); void loadAtlas(); },
+      }, 'Atlas'),
+      ' to find a populated scope.',
+    ])
+  );
+  return wrap;
+}
+
+function renderPreferenceCard(p) {
+  const card = el('li', { class: 'record-card', dataset: { flavor: 'pref', id: p.id } });
+  card._render = () => {
+    card.innerHTML = '';
+    card.append(
+      el('div', { class: 'record-card__head' }, [
+        el('span', { class: 'record-card__category' }, p.category),
+        el('button', {
+          class: 'record-card__edit',
+          type: 'button',
+          onClick: () => openPreferenceEdit(card, p),
+        }, 'edit'),
+      ]),
+      el('p', { class: 'record-card__body' }, p.preference)
+    );
+    if (p.context) {
+      card.append(el('p', { class: 'record-card__context' }, p.context));
+    }
+    const meta = el('dl', { class: 'record-card__meta' });
+    meta.append(
+      el('dt', {}, 'confidence'),
+      el('dd', {}, (p.confidence ?? 1).toFixed(2)),
+      el('dt', {}, 'updated'),
+      el('dd', {}, fmtTime(p.updated_at)),
+    );
+    if (p.promoted_from) {
+      meta.append(el('dt', {}, 'promoted from'), el('dd', {}, p.promoted_from));
+    }
+    card.append(meta);
+  };
+  card._render();
+  return card;
+}
+
+function openPreferenceEdit(card, p) {
+  card.classList.add('is-editing');
+  const initial = card._patch ? { ...p, ...card._patch } : p;
+  card.innerHTML = '';
+  const form = el('form', {
+    class: 'record-edit',
+    onSubmit: async (e) => {
+      e.preventDefault();
+      const updates = {
+        category: form.category.value.trim(),
+        preference: form.preference.value.trim(),
+        context: form.context.value.trim() || null,
+        confidence: Number(form.confidence.value),
+      };
+      try {
+        const updated = await api(`/api/v1/preferences/${encodeURIComponent(p.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(updates),
+        });
+        Object.assign(p, updated);
+        card.classList.remove('is-editing');
+        card._render();
+        showToast('preference updated', 'success');
+      } catch (err) {
+        showToast(err.message);
+      }
+    },
+  });
+
+  form.append(
+    field('category', 'category', initial.category),
+    fieldText('preference', 'preference', initial.preference),
+    fieldText('context', 'context', initial.context ?? ''),
+    el('div', { class: 'record-edit__field-row' }, [
+      field('confidence', 'confidence (0–1)', String(initial.confidence ?? 1), { type: 'number', min: '0', max: '1', step: '0.01' }),
+    ]),
+    el('div', { class: 'record-edit__actions' }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost',
+        onClick: () => { card.classList.remove('is-editing'); card._render(); },
+      }, 'cancel'),
+      el('button', { type: 'submit', class: 'btn btn--primary' }, 'save'),
+    ])
+  );
+
+  card.append(form);
+}
+
+function renderFactCard(f) {
+  const card = el('li', { class: 'record-card', dataset: { flavor: 'fact', id: f.id } });
+  card._render = () => {
+    card.innerHTML = '';
+    card.append(
+      el('div', { class: 'record-card__head' }, [
+        el('span', { class: 'record-card__category' }, 'fact'),
+        el('button', {
+          class: 'record-card__edit',
+          type: 'button',
+          onClick: () => openFactEdit(card, f),
+        }, 'edit'),
+      ]),
+      el('div', { class: 'record-card__triple' }, [
+        el('span', { class: 'record-card__subject' }, f.subject),
+        el('span', { class: 'record-card__predicate' }, f.predicate),
+        el('span', { class: 'record-card__object' }, f.object),
+      ]),
+    );
+    const meta = el('dl', { class: 'record-card__meta' });
+    meta.append(el('dt', {}, 'confidence'), el('dd', {}, (f.confidence ?? 1).toFixed(2)));
+    if (f.source) meta.append(el('dt', {}, 'source'), el('dd', {}, f.source));
+    if (f.valid_from) meta.append(el('dt', {}, 'from'), el('dd', {}, fmtTime(f.valid_from)));
+    if (f.valid_until) meta.append(el('dt', {}, 'until'), el('dd', {}, fmtTime(f.valid_until)));
+    meta.append(el('dt', {}, 'recorded'), el('dd', {}, fmtTime(f.created_at)));
+    card.append(meta);
+  };
+  card._render();
+  return card;
+}
+
+function openFactEdit(card, f) {
+  card.classList.add('is-editing');
+  card.innerHTML = '';
+  const form = el('form', {
+    class: 'record-edit',
+    onSubmit: async (e) => {
+      e.preventDefault();
+      const updates = {
+        subject: form.subject.value.trim(),
+        predicate: form.predicate.value.trim(),
+        object: form.object.value.trim(),
+        confidence: Number(form.confidence.value),
+        source: form.source.value.trim() || null,
+        valid_from: form.valid_from.value.trim() || null,
+        valid_until: form.valid_until.value.trim() || null,
+      };
+      try {
+        const updated = await api(`/api/v1/facts/${encodeURIComponent(f.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(updates),
+        });
+        Object.assign(f, updated);
+        card.classList.remove('is-editing');
+        card._render();
+        showToast('fact updated', 'success');
+      } catch (err) {
+        showToast(err.message);
+      }
+    },
+  });
+
+  form.append(
+    el('div', { class: 'record-edit__field-row' }, [
+      field('subject', 'subject', f.subject),
+      field('predicate', 'predicate', f.predicate),
+      field('confidence', 'confidence', String(f.confidence ?? 1), { type: 'number', min: '0', max: '1', step: '0.01' }),
+    ]),
+    fieldText('object', 'object', f.object),
+    field('source', 'source (optional)', f.source ?? ''),
+    el('div', { class: 'record-edit__field-row' }, [
+      field('valid_from', 'valid from (ISO, optional)', f.valid_from ?? ''),
+      field('valid_until', 'valid until (ISO, optional)', f.valid_until ?? ''),
+    ]),
+    el('div', { class: 'record-edit__actions' }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost',
+        onClick: () => { card.classList.remove('is-editing'); card._render(); },
+      }, 'cancel'),
+      el('button', { type: 'submit', class: 'btn btn--primary' }, 'save'),
+    ])
+  );
+
+  card.append(form);
+}
+
+function field(name, label, value, attrs = {}) {
+  const wrap = el('div', { class: 'record-edit__field' });
+  wrap.append(el('label', { for: `f-${name}` }, label));
+  wrap.append(el('input', { id: `f-${name}`, name, value, ...attrs }));
+  return wrap;
+}
+
+function fieldText(name, label, value) {
+  const wrap = el('div', { class: 'record-edit__field' });
+  wrap.append(el('label', { for: `f-${name}` }, label));
+  const ta = el('textarea', { id: `f-${name}`, name, rows: '3' }, value);
+  ta.value = value;
+  wrap.append(ta);
+  return wrap;
+}
+
+// ----- Atlas view -----------------------------------------------------------
+
+function renderAtlas(atlas) {
+  $('#atlas-projects-count').textContent = atlas.projects.length;
+  $('#atlas-users-count').textContent = atlas.users.length;
+  renderProjectCards(atlas.projects);
+  renderUserCards(atlas.users);
+}
+
+function renderProjectCards(projects) {
+  const list = $('#atlas-projects');
+  list.innerHTML = '';
+  if (!projects.length) {
+    list.append(el('li', { class: 'stream__empty' }, 'No projects registered yet.'));
+    return;
+  }
+  for (const p of projects) {
+    const total = p.entities + p.sessions + p.traces + p.preferences + p.facts;
+    const isActive = p.id === settings.projectId;
+    const flavor = p.id === 'global' ? 'global' : 'project';
+    const item = el('li', {
+      class: `card${total === 0 ? ' is-empty' : ''}${isActive ? ' is-active' : ''}`,
+      dataset: { flavor },
+    }, [
+      el('div', { class: 'card__head' }, [
+        el('span', { class: 'card__name' }, p.display_name || p.id),
+        el('span', { class: 'card__id' }, p.id),
+      ]),
+      el('div', { class: 'card__metrics' }, [
+        metric('entities', p.entities),
+        metric('sessions', p.sessions),
+        metric('traces', p.traces),
+        metric('prefs', p.preferences),
+        metric('facts', p.facts),
+        metric('users', p.user_count),
+      ]),
+      el('div', { class: 'card__foot' }, [
+        el('span', {}, `created ${fmtTime(p.created_at)}`),
+        p.last_activity
+          ? el('em', {}, `last touched ${fmtTime(p.last_activity)}`)
+          : el('em', {}, 'no activity'),
+      ]),
+    ]);
+
+    // Click anywhere on the card body to set just the project (keeps current user)
+    item.addEventListener('click', (e) => {
+      // Ignore clicks that originated on a chip (chips have their own handler)
+      if (e.target instanceof HTMLElement && e.target.closest('.chip')) return;
+      applyScope(p.id, settings.userId, 'project');
+    });
+
+    if (p.users_present && p.users_present.length > 0) {
+      item.append(buildChipRow('users in', p.users_present, settings.userId, (uid) =>
+        applyScope(p.id, uid, 'both')
+      ));
+    }
+
+    list.append(item);
+  }
+}
+
+function renderUserCards(users) {
+  const list = $('#atlas-users');
+  list.innerHTML = '';
+  if (!users.length) {
+    list.append(el('li', { class: 'stream__empty' }, 'No users registered yet.'));
+    return;
+  }
+  for (const u of users) {
+    const total = u.entities + u.sessions + u.traces;
+    const isActive = u.id === settings.userId;
+    const item = el('li', {
+      class: `card${total === 0 ? ' is-empty' : ''}${isActive ? ' is-active' : ''}`,
+      dataset: { flavor: 'user' },
+    }, [
+      el('div', { class: 'card__head' }, [
+        el('span', { class: 'card__name' }, u.display_name || u.id),
+        el('span', { class: 'card__id' }, u.id),
+      ]),
+      el('div', { class: 'card__metrics' }, [
+        metric('entities', u.entities),
+        metric('sessions', u.sessions),
+        metric('traces', u.traces),
+        metric('projects', u.project_count),
+      ]),
+      el('div', { class: 'card__foot' }, [
+        el('span', {}, `created ${fmtTime(u.created_at)}`),
+        u.last_activity
+          ? el('em', {}, `last touched ${fmtTime(u.last_activity)}`)
+          : el('em', {}, 'no activity'),
+      ]),
+    ]);
+
+    item.addEventListener('click', (e) => {
+      if (e.target instanceof HTMLElement && e.target.closest('.chip')) return;
+      applyScope(settings.projectId, u.id, 'user');
+    });
+
+    if (u.projects_present && u.projects_present.length > 0) {
+      item.append(buildChipRow('projects with', u.projects_present, settings.projectId, (pid) =>
+        applyScope(pid, u.id, 'both')
+      ));
+    }
+
+    list.append(item);
+  }
+}
+
+function buildChipRow(label, ids, activeId, onPick) {
+  const MAX_VISIBLE = 8;
+  const visible = ids.slice(0, MAX_VISIBLE);
+  const overflow = ids.length - visible.length;
+  const row = el('div', { class: 'card__chips' });
+  row.append(el('span', { class: 'card__chips-label' }, label));
+  for (const id of visible) {
+    row.append(
+      el('button', {
+        type: 'button',
+        class: `chip${id === activeId ? ' is-active' : ''}`,
+        onClick: (e) => { e.stopPropagation(); onPick(id); },
+      }, id)
+    );
+  }
+  if (overflow > 0) {
+    row.append(el('span', { class: 'chip chip--more' }, `+${overflow}`));
+  }
+  return row;
+}
+
+/**
+ * Set the active scope and route to Observatory.
+ * `which` only affects the toast wording so the user knows what changed.
+ */
+function applyScope(projectId, userId, which) {
+  const changed =
+    (projectId !== settings.projectId ? 1 : 0) +
+    (userId !== settings.userId ? 1 : 0);
+  settings = { ...settings, projectId, userId };
+  saveSettings(settings);
+  updateScopeDisplay();
+  switchView('observatory');
+  if (changed === 0) {
+    showToast(`already on ${projectId} / ${userId}`, 'info');
+  } else if (which === 'both' || changed === 2) {
+    showToast(`scope set to ${projectId} / ${userId}`, 'info');
+  } else if (which === 'project') {
+    showToast(`project → ${projectId}`, 'info');
+  } else {
+    showToast(`user → ${userId}`, 'info');
+  }
+  void refresh();
+}
+
+function metric(label, value) {
+  return el('div', { class: 'card__metric' }, [
+    el('span', { class: 'card__metric-label' }, label),
+    el('span', { class: 'card__metric-value' }, String(value)),
+  ]);
+}
+
+function switchView(view) {
+  state.view = view;
+  for (const btn of $$('.view-switch__btn')) {
+    const isActive = btn.dataset.view === view;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  }
+  for (const pane of $$('[data-view-pane]')) {
+    pane.hidden = pane.dataset.viewPane !== view;
+  }
+  const title = document.querySelector('[data-title-primary]');
+  if (title) title.textContent = view === 'atlas' ? 'Atlas' : 'Observatory';
+}
+
+async function loadAtlas() {
+  setStatus('loading', 'fetching');
+  try {
+    const atlas = await api('/api/v1/atlas');
+    state.atlas = atlas;
+    renderAtlas(atlas);
+    setStatus('ok', 'connected');
+  } catch (err) {
+    setStatus('error', 'offline');
+    showToast(`Atlas failed: ${err.message}`);
+  }
+}
+
+function bindViewSwitch() {
+  for (const btn of $$('.view-switch__btn')) {
+    btn.addEventListener('click', () => {
+      const view = btn.dataset.view;
+      switchView(view);
+      if (view === 'atlas') void loadAtlas();
+    });
+  }
+}
+
 // ----- Refresh / load -------------------------------------------------------
 
 async function refresh() {
   setStatus('loading', 'fetching');
   $('#empty-graph').hidden = true;
   try {
-    const snapshot = await api('/api/v1/snapshot?entity_limit=200&relation_limit=500');
+    // Snapshot covers the graph + stream tiers; full prefs/facts come from
+    // their list endpoints so the inline Records section can show everything,
+    // not just the first 15.
+    const [snapshot, preferences, facts] = await Promise.all([
+      api('/api/v1/snapshot?entity_limit=200&relation_limit=500'),
+      api('/api/v1/preferences'),
+      api('/api/v1/facts'),
+    ]);
     state.snapshot = snapshot;
 
     const counts = {};
@@ -876,9 +1509,9 @@ async function refresh() {
     graph.setData(snapshot.entities, snapshot.relations);
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
-    renderRecords(snapshot.recent_preferences, snapshot.recent_facts);
     renderMessages(snapshot.recent_messages);
     renderTraces(snapshot.recent_traces);
+    renderRecordsView(preferences, facts);
 
     setStatus('ok', 'connected');
   } catch (err) {
@@ -890,14 +1523,25 @@ async function refresh() {
 
 // ----- Init -----------------------------------------------------------------
 
-function init() {
+async function init() {
   graph = new GraphView($('#graph'));
   graph.onSelect = selectEntity;
   bindSettings();
   bindSearch();
   bindTraversal();
+  bindViewSwitch();
+  bindRecordsSearch();
+  bindLogin();
   updateScopeDisplay();
   renderTypeFilters();
+
+  // Gate the rest of init() on a successful auth check
+  const auth = await checkAuth();
+  if (!auth.authenticated) {
+    showLoginVeil();
+    return;
+  }
+  hideLoginVeil();
 
   $('#refresh').addEventListener('click', () => void refresh());
 
@@ -911,6 +1555,7 @@ function init() {
       $('#settings-toggle').click();
     } else if (e.key === 'Escape') {
       $('#drawer').hidden = true;
+      $('#settings-toggle').setAttribute('aria-expanded', 'false');
     }
   });
 

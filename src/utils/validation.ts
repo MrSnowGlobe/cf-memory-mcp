@@ -132,6 +132,27 @@ export const InvalidateFactSchema = z.object({
 });
 export type InvalidateFactInput = z.infer<typeof InvalidateFactSchema>;
 
+export const UpdatePreferenceSchema = z.object({
+  category: z.string().min(1).max(MAX_SHORT_STRING).optional(),
+  preference: z.string().min(1).max(MAX_STRING).optional(),
+  context: z.string().max(MAX_STRING).nullable().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  metadata: metadataSchema,
+});
+export type UpdatePreferenceInput = z.infer<typeof UpdatePreferenceSchema>;
+
+export const UpdateFactSchema = z.object({
+  subject: z.string().min(1).max(MAX_SHORT_STRING).optional(),
+  predicate: z.string().min(1).max(MAX_SHORT_STRING).optional(),
+  object: z.string().min(1).max(MAX_STRING).optional(),
+  valid_from: z.string().max(MAX_SHORT_STRING).nullable().optional(),
+  valid_until: z.string().max(MAX_SHORT_STRING).nullable().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  source: z.string().max(MAX_SHORT_STRING).nullable().optional(),
+  metadata: metadataSchema,
+});
+export type UpdateFactInput = z.infer<typeof UpdateFactSchema>;
+
 // ============================================================
 // Procedural Memory
 // ============================================================

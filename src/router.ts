@@ -5,6 +5,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { AppType } from './types';
 import { HttpError } from './utils/errors';
 import { authMiddleware } from './middleware/auth';
+import { loginHandler, logoutHandler, meHandler } from './auth/session';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
 import {
@@ -17,7 +18,9 @@ import {
   AddRelationSchema,
   TraverseRelationsSchema,
   AddPreferenceSchema,
+  UpdatePreferenceSchema,
   AddFactSchema,
+  UpdateFactSchema,
   InvalidateFactSchema,
   StartTraceSchema,
   CompleteTraceSchema,
@@ -34,6 +37,7 @@ import { ProceduralMemory } from './memory/procedural';
 import { buildContext } from './memory/context';
 import { promote } from './memory/promotion';
 import { getGraphSnapshot } from './memory/snapshot';
+import { getAtlas } from './memory/atlas';
 import { migrateNamespaces } from './admin/migrate-namespaces';
 import mcpServer from './mcp/server';
 
@@ -71,6 +75,14 @@ app.use('*', async (c, next) => {
 // ---------------------------------------------------------------------------
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+// ---------------------------------------------------------------------------
+// Browser session auth — no bearer/cookie required to hit /auth/*
+// ---------------------------------------------------------------------------
+
+app.post('/auth/login', loginHandler);
+app.post('/auth/logout', logoutHandler);
+app.get('/auth/me', meHandler);
 
 // ---------------------------------------------------------------------------
 // Apply middleware to all API and MCP routes
@@ -359,6 +371,16 @@ app.post(
   }
 );
 
+app.put(
+  '/api/v1/preferences/:id',
+  zValidator('json', UpdatePreferenceSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const updated = await ltm(c).updatePreference(c.req.param('id'), body);
+    return c.json(updated);
+  }
+);
+
 // ===========================================================================
 // Long-Term Memory — Facts
 // ===========================================================================
@@ -397,6 +419,16 @@ app.put(
     const body = c.req.valid('json');
     await ltm(c).invalidateFact(c.req.param('id'), body.valid_until);
     return c.json({ success: true });
+  }
+);
+
+app.put(
+  '/api/v1/facts/:id',
+  zValidator('json', UpdateFactSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const updated = await ltm(c).updateFact(c.req.param('id'), body);
+    return c.json(updated);
   }
 );
 
@@ -510,6 +542,11 @@ app.post(
 // ===========================================================================
 // Visualizer snapshot — single read-only bootstrap for the Observatory UI
 // ===========================================================================
+
+app.get('/api/v1/atlas', async (c) => {
+  const atlas = await getAtlas(c.env);
+  return c.json(atlas);
+});
 
 app.get('/api/v1/snapshot', async (c) => {
   const num = (q: string | undefined): number | undefined =>
