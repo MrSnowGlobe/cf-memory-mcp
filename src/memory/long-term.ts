@@ -30,6 +30,7 @@ import {
 } from '../services/vectorize';
 import { resolveEntity } from '../services/resolution';
 import { traverseRelations, type TraverseOptions } from '../services/graph';
+import { publishEvent } from '../services/events';
 import type { NeighborRow } from '../types';
 
 export class LongTermMemory {
@@ -95,7 +96,7 @@ export class LongTermMemory {
     });
 
     // 6. Return the new entity row
-    return {
+    const row: EntityRow = {
       id,
       project_id: this.projectId,
       user_id: this.userId,
@@ -109,6 +110,14 @@ export class LongTermMemory {
       updated_at: now,
       vector_id: id,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'entity_added', {
+      id: row.id,
+      name: row.name,
+      entity_type: row.entity_type,
+      subtype: row.subtype,
+      description: row.description,
+    });
+    return row;
   }
 
   async getEntity(id: string): Promise<EntityRow | null> {
@@ -198,7 +207,7 @@ export class LongTermMemory {
     }
 
     // 5. Build the updated row locally instead of re-querying
-    return {
+    const row: EntityRow = {
       ...existing,
       name: updates.name ?? existing.name,
       entity_type: updates.entity_type ?? existing.entity_type,
@@ -207,6 +216,14 @@ export class LongTermMemory {
       metadata: updates.metadata !== undefined ? JSON.stringify(updates.metadata) : existing.metadata,
       updated_at: now,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'entity_updated', {
+      id: row.id,
+      name: row.name,
+      entity_type: row.entity_type,
+      subtype: row.subtype,
+      description: row.description,
+    });
+    return row;
   }
 
   async deleteEntity(id: string): Promise<void> {
@@ -230,6 +247,11 @@ export class LongTermMemory {
         'DELETE FROM entities WHERE id = ? AND project_id = ? AND user_id = ?'
       ).bind(id, this.projectId, this.userId),
     ]);
+
+    await publishEvent(this.env, this.projectId, this.userId, 'entity_deleted', {
+      id: entity.id,
+      name: entity.name,
+    });
   }
 
   async searchEntities(
@@ -272,6 +294,13 @@ export class LongTermMemory {
     if (!row) {
       throw new Error('Failed to insert or retrieve relation');
     }
+    await publishEvent(this.env, this.projectId, this.userId, 'relation_added', {
+      id: row.id,
+      source_entity_id: row.source_entity_id,
+      target_entity_id: row.target_entity_id,
+      relation_type: row.relation_type,
+      relation_strength: row.relation_strength,
+    });
     return row;
   }
 
@@ -337,7 +366,7 @@ export class LongTermMemory {
       { category: input.category }
     );
 
-    return {
+    const row: PreferenceRow = {
       id,
       project_id: this.projectId,
       user_id: this.userId,
@@ -351,6 +380,13 @@ export class LongTermMemory {
       updated_at: now,
       vector_id: id,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'preference_added', {
+      id: row.id,
+      category: row.category,
+      preference: row.preference,
+      context: row.context,
+    });
+    return row;
   }
 
   async listPreferences(category?: string): Promise<PreferenceRow[]> {
@@ -443,7 +479,7 @@ export class LongTermMemory {
       );
     }
 
-    return {
+    const row: PreferenceRow = {
       ...existing,
       category: updates.category ?? existing.category,
       preference: updates.preference ?? existing.preference,
@@ -452,6 +488,13 @@ export class LongTermMemory {
       metadata: updates.metadata !== undefined ? JSON.stringify(updates.metadata) : existing.metadata,
       updated_at: now,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'preference_updated', {
+      id: row.id,
+      category: row.category,
+      preference: row.preference,
+      context: row.context,
+    });
+    return row;
   }
 
   async searchPreferences(
@@ -513,7 +556,7 @@ export class LongTermMemory {
       predicate: input.predicate,
     });
 
-    return {
+    const row: FactRow = {
       id,
       project_id: this.projectId,
       user_id: this.userId,
@@ -529,6 +572,13 @@ export class LongTermMemory {
       created_at: now,
       vector_id: id,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'fact_added', {
+      id: row.id,
+      subject: row.subject,
+      predicate: row.predicate,
+      object: row.object,
+    });
+    return row;
   }
 
   async listFacts(opts?: {
@@ -654,7 +704,7 @@ export class LongTermMemory {
       );
     }
 
-    return {
+    const row: FactRow = {
       ...existing,
       subject: updates.subject ?? existing.subject,
       predicate: updates.predicate ?? existing.predicate,
@@ -665,6 +715,13 @@ export class LongTermMemory {
       source: updates.source !== undefined ? updates.source : existing.source,
       metadata: updates.metadata !== undefined ? JSON.stringify(updates.metadata) : existing.metadata,
     };
+    await publishEvent(this.env, this.projectId, this.userId, 'fact_updated', {
+      id: row.id,
+      subject: row.subject,
+      predicate: row.predicate,
+      object: row.object,
+    });
+    return row;
   }
 
   async invalidateFact(id: string, validUntil?: string): Promise<void> {
@@ -679,5 +736,10 @@ export class LongTermMemory {
     if (result.meta.changes === 0) {
       throw new NotFoundError(`Fact ${id}`);
     }
+
+    await publishEvent(this.env, this.projectId, this.userId, 'fact_invalidated', {
+      id,
+      valid_until: until,
+    });
   }
 }

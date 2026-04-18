@@ -13,6 +13,9 @@ export interface Bindings {
   OBSERVATORY_PASSWORD?: string;
   EMBEDDING_MODEL: string;
   EMBEDDING_DIMENSIONS: string;
+  /** Durable Object namespace for per-scope memory event pub/sub. Optional
+   *  so tests can construct an env without wiring a DO. */
+  EVENTS?: DurableObjectNamespace;
 }
 
 export type Variables = {

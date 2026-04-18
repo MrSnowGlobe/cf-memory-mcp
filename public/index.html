@@ -77,6 +77,11 @@
           <span class="status__label">idle</span>
         </div>
 
+        <div class="live" id="live-indicator" data-state="off" title="Live events: off" aria-label="Live events: off">
+          <span class="live__dot"></span>
+          <span class="live__label">live</span>
+        </div>
+
         <button class="btn btn--ghost" id="refresh" title="Refresh snapshot (R)" aria-label="Refresh snapshot">
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
             <path
@@ -149,6 +154,16 @@
           <label for="setting-token">Bearer token</label>
           <input type="password" id="setting-token" autocomplete="off" spellcheck="false" />
           <span class="field__hint">Sent as <code>Authorization: Bearer …</code> on every request.</span>
+        </div>
+
+        <div class="field field--inline">
+          <label class="toggle">
+            <input type="checkbox" id="setting-live" />
+            <span class="toggle__label">Live updates</span>
+            <span class="toggle__hint">
+              Subscribe to a WebSocket of memory writes so new rows appear without a manual refresh.
+            </span>
+          </label>
         </div>
 
         <div class="drawer__actions">

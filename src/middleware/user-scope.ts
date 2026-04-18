@@ -4,7 +4,10 @@ import type { AppType } from '../types';
 const knownUsers = new Set<string>();
 
 export const userScopeMiddleware = createMiddleware<AppType>(async (c, next) => {
-  const userId = c.req.header('X-User-Id') || 'default';
+  // Header wins; query param is a fallback for contexts where headers
+  // aren't available (e.g. browser WebSocket opens can't set headers).
+  const userId =
+    c.req.header('X-User-Id') || c.req.query('user_id') || 'default';
 
   if (!knownUsers.has(userId)) {
     await c.env.DB.prepare(

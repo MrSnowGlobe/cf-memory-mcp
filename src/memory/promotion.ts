@@ -1,6 +1,7 @@
 import type { Bindings, EntityRow, PreferenceRow, FactRow } from '../types';
 import { generateId } from '../utils/ids';
 import { vectorInsert } from '../services/vectorize';
+import { publishEvent } from '../services/events';
 
 type PromotionType = 'entity' | 'preference' | 'fact';
 type PromotionTarget = 'user' | 'global';
@@ -152,6 +153,14 @@ export async function promote(
       predicate: row.predicate,
     });
   }
+
+  await publishEvent(env, projectId, userId, 'promoted', {
+    type,
+    source_id: id,
+    promoted_id: promotedId,
+    target,
+    reason,
+  });
 
   return { promotedId };
 }
