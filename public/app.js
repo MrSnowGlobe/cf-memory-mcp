@@ -751,7 +751,19 @@ function renderTraces(traces) {
   for (const t of traces) {
     const successKey = t.success === 1 ? '1' : t.success === 0 ? '0' : '-';
     list.append(
-      el('li', { class: 'trace' + freshClass(t.id) }, [
+      el('li', {
+        class: 'trace trace--clickable' + freshClass(t.id),
+        role: 'button',
+        tabindex: '0',
+        title: 'Open trace inspector',
+        onClick: () => openTraceInspector(t.id),
+        onKeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            openTraceInspector(t.id);
+          }
+        },
+      }, [
         el('span', { class: 'trace__time' }, fmtTime(t.started_at)),
         el('span', { class: 'trace__bullet', dataset: { success: successKey } }),
         el('span', { class: 'trace__task' }, t.task),
@@ -773,11 +785,20 @@ async function selectEntity(node) {
   card.append(
     el('div', { class: 'detail-card__head' }, [
       el('div', { class: 'detail-card__type', style: `--type: ${color}` }, node.entity_type),
-      el('button', {
-        type: 'button',
-        class: 'record-card__edit',
-        onClick: () => openEntityEdit(card, node),
-      }, 'edit'),
+      el('div', { class: 'record-card__actions' }, [
+        el('button', {
+          type: 'button',
+          class: 'record-card__edit record-card__action--expand',
+          title: `Fold ${state.traversal.direction}/${state.traversal.depth}-hop neighbourhood into the chart`,
+          onClick: () => expandEntitySubgraph(node),
+        }, '+ expand'),
+        promoteButton('entity', node.id),
+        el('button', {
+          type: 'button',
+          class: 'record-card__edit',
+          onClick: () => openEntityEdit(card, node),
+        }, 'edit'),
+      ]),
     ])
   );
   card.append(el('h2', { class: 'detail-card__name' }, node.name));
@@ -1123,11 +1144,14 @@ function renderPreferenceCard(p) {
     card.append(
       el('div', { class: 'record-card__head' }, [
         el('span', { class: 'record-card__category' }, p.category),
-        el('button', {
-          class: 'record-card__edit',
-          type: 'button',
-          onClick: () => openPreferenceEdit(card, p),
-        }, 'edit'),
+        el('div', { class: 'record-card__actions' }, [
+          promoteButton('preference', p.id, p.promoted_from),
+          el('button', {
+            class: 'record-card__edit',
+            type: 'button',
+            onClick: () => openPreferenceEdit(card, p),
+          }, 'edit'),
+        ]),
       ]),
       el('p', { class: 'record-card__body' }, p.preference)
     );
@@ -1206,11 +1230,14 @@ function renderFactCard(f) {
     card.append(
       el('div', { class: 'record-card__head' }, [
         el('span', { class: 'record-card__category' }, 'fact'),
-        el('button', {
-          class: 'record-card__edit',
-          type: 'button',
-          onClick: () => openFactEdit(card, f),
-        }, 'edit'),
+        el('div', { class: 'record-card__actions' }, [
+          promoteButton('fact', f.id, f.promoted_from),
+          el('button', {
+            class: 'record-card__edit',
+            type: 'button',
+            onClick: () => openFactEdit(card, f),
+          }, 'edit'),
+        ]),
       ]),
       el('div', { class: 'record-card__triple' }, [
         el('span', { class: 'record-card__subject' }, f.subject),
@@ -1642,6 +1669,596 @@ function bindLiveToggle() {
   checkbox.checked = settings.live;
 }
 
+// ----- Graph traversal: click-to-expand into the canvas ---------------------
+
+/**
+ * Pull the {direction, depth}-hop subgraph for `entity` and fold the returned
+ * entities + edges into the chart. Existing nodes keep their positions; new
+ * nodes get seeded near the root so the spring sim visibly tugs them in.
+ */
+async function expandEntitySubgraph(entity) {
+  const prevEntityIds = new Set(graph.nodes.map((n) => n.id));
+  const prevRelIds = new Set(graph.edges.map((e) => e.id));
+  const root = graph.byId.get(entity.id);
+
+  try {
+    const data = await api(
+      `/api/v1/entities/${encodeURIComponent(entity.id)}/subgraph`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          max_depth: state.traversal.depth,
+          direction: state.traversal.direction,
+        }),
+      }
+    );
+
+    // Seed new nodes near the root so they're visible in the existing viewport.
+    const seededNew = data.entities
+      .filter((e) => !prevEntityIds.has(e.id))
+      .map((e) => ({
+        ...e,
+        _seedX: root ? root.x + (Math.random() - 0.5) * 60 : undefined,
+        _seedY: root ? root.y + (Math.random() - 0.5) * 60 : undefined,
+      }));
+
+    const mergedEntities = [...graph.nodes, ...seededNew];
+    const newRelations = data.relations.filter((r) => !prevRelIds.has(r.id));
+    const mergedRelations = [...graph.edges, ...newRelations];
+
+    graph.setData(mergedEntities, mergedRelations);
+    graph.setSelected(entity.id);
+    graph.alpha = 1; // re-heat the sim so the new block settles
+
+    // Refresh the type filter counts to account for the new entities.
+    const counts = {};
+    for (const e of mergedEntities) {
+      counts[e.entity_type] = (counts[e.entity_type] ?? 0) + 1;
+    }
+    state.typeCounts = counts;
+    renderTypeFilters();
+
+    if (seededNew.length || newRelations.length) {
+      showToast(
+        `expanded: +${seededNew.length} entit${seededNew.length === 1 ? 'y' : 'ies'}, +${newRelations.length} edge${newRelations.length === 1 ? '' : 's'}`,
+        'info'
+      );
+    } else {
+      showToast('no new neighbours within depth', 'info');
+    }
+  } catch (err) {
+    showToast(`Expand failed: ${err.message}`);
+  }
+}
+
+// ----- Trace inspector ------------------------------------------------------
+
+async function openTraceInspector(traceId) {
+  const ins = $('#trace-inspector');
+  const body = $('#ti-body');
+  const title = $('#ti-title');
+  title.textContent = 'loading trace…';
+  body.innerHTML = '';
+  body.append(el('div', { class: 'ti-loading' }, 'Loading steps + tool calls…'));
+  ins.hidden = false;
+  document.body.classList.add('has-inspector');
+  try {
+    const detail = await api(`/api/v1/traces/${encodeURIComponent(traceId)}`);
+    renderTraceDetail(body, title, detail);
+  } catch (err) {
+    title.textContent = 'Failed';
+    body.innerHTML = '';
+    body.append(el('p', { class: 'ti-error' }, err.message));
+  }
+}
+
+function closeTraceInspector() {
+  $('#trace-inspector').hidden = true;
+  document.body.classList.remove('has-inspector');
+}
+
+function renderTraceDetail(container, titleNode, detail) {
+  const { trace, steps } = detail;
+  titleNode.textContent = trace.task;
+  container.innerHTML = '';
+
+  const start = Date.parse(trace.started_at);
+  const end = trace.completed_at
+    ? Date.parse(trace.completed_at)
+    : Math.max(start + 1, Date.now());
+  const totalMs = Math.max(1, end - start);
+
+  // --- Summary strip -------------------------------------------------------
+  const summary = el('dl', { class: 'ti-summary' });
+  const successLabel =
+    trace.success === 1 ? 'success' : trace.success === 0 ? 'failure' : 'in-flight';
+  const successTone =
+    trace.success === 1 ? 'ok' : trace.success === 0 ? 'fail' : 'pending';
+  summary.append(
+    el('dt', {}, 'status'),
+    el('dd', { class: `ti-status ti-status--${successTone}` }, successLabel),
+    el('dt', {}, 'started'),
+    el('dd', {}, fmtTime(trace.started_at)),
+    el('dt', {}, 'completed'),
+    el('dd', {}, trace.completed_at ? fmtTime(trace.completed_at) : '—'),
+    el('dt', {}, 'duration'),
+    el('dd', {}, fmtDuration(trace.duration_ms)),
+    el('dt', {}, 'steps'),
+    el('dd', {}, String(steps.length)),
+    el('dt', {}, 'tool calls'),
+    el('dd', {}, String(steps.reduce((n, s) => n + s.tool_calls.length, 0))),
+  );
+  if (trace.outcome) {
+    summary.append(
+      el('dt', {}, 'outcome'),
+      el('dd', { class: 'ti-outcome' }, trace.outcome)
+    );
+  }
+  container.append(summary);
+
+  // --- Timeline scale ------------------------------------------------------
+  const scale = el('div', { class: 'ti-scale' }, [
+    el('span', {}, '0'),
+    el('span', {}, fmtDuration(Math.round(totalMs / 2))),
+    el('span', {}, fmtDuration(totalMs)),
+  ]);
+  container.append(scale);
+
+  if (!steps.length) {
+    container.append(
+      el('p', { class: 'ti-empty' }, 'No steps recorded for this trace.')
+    );
+    return;
+  }
+
+  // --- Steps list ----------------------------------------------------------
+  const list = el('ol', { class: 'ti-steps' });
+  for (const step of steps) {
+    // Steps don't have completed_at; treat each step as an instant at created_at
+    // and infer "width" from its tool calls' durations.
+    const stepStart = Date.parse(step.created_at);
+    const stepOffset = Math.max(0, stepStart - start);
+    const offsetPct = Math.min(99, (stepOffset / totalMs) * 100);
+    const toolsDuration = step.tool_calls.reduce(
+      (n, c) => n + (c.duration_ms ?? 0),
+      0
+    );
+    const widthPct = Math.max(
+      2,
+      Math.min(100 - offsetPct, (toolsDuration / totalMs) * 100)
+    );
+
+    const item = el('li', { class: 'ti-step' });
+    item.append(
+      el('div', { class: 'ti-step__head' }, [
+        el('span', { class: 'ti-step__n' }, `#${step.step_number}`),
+        el('span', { class: 'ti-step__time' }, fmtTime(step.created_at)),
+      ]),
+      el('div', { class: 'ti-step__bar' }, [
+        el('div', {
+          class: 'ti-step__bar-fill',
+          style: `left: ${offsetPct.toFixed(2)}%; width: ${widthPct.toFixed(2)}%;`,
+          title: `${fmtDuration(stepOffset)} offset · ${fmtDuration(toolsDuration)} of tool work`,
+        }),
+      ])
+    );
+
+    if (step.thought) {
+      item.append(el('p', { class: 'ti-step__thought' }, step.thought));
+    }
+    if (step.action) {
+      item.append(
+        el('p', { class: 'ti-step__action' }, [
+          el('span', { class: 'ti-step__label' }, 'action'),
+          step.action,
+        ])
+      );
+    }
+    if (step.observation) {
+      item.append(
+        el('p', { class: 'ti-step__observation' }, [
+          el('span', { class: 'ti-step__label' }, 'observation'),
+          step.observation,
+        ])
+      );
+    }
+
+    if (step.tool_calls.length) {
+      const calls = el('ul', { class: 'ti-tools' });
+      for (const call of step.tool_calls) {
+        const statusTone =
+          call.status === 'success' ? 'ok' : call.status === 'failure' ? 'fail' : 'pending';
+        calls.append(
+          el('li', { class: `ti-tool ti-tool--${statusTone}` }, [
+            el('span', { class: 'ti-tool__name' }, call.tool_name),
+            el('span', { class: 'ti-tool__status' }, call.status),
+            el('span', { class: 'ti-tool__duration' }, fmtDuration(call.duration_ms)),
+          ])
+        );
+      }
+      item.append(calls);
+    }
+
+    list.append(item);
+  }
+  container.append(list);
+}
+
+// ----- Unified global search -----------------------------------------------
+
+let globalSearchTimer = null;
+let globalSearchSeq = 0;
+
+function bindGlobalSearch() {
+  const input = $('#global-search');
+  const dropdown = $('#global-search-dropdown');
+  if (!input || !dropdown) return;
+
+  input.addEventListener('input', () => {
+    clearTimeout(globalSearchTimer);
+    const q = input.value.trim();
+    if (!q) {
+      dropdown.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    globalSearchTimer = setTimeout(() => runGlobalSearch(q), 220);
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim()) dropdown.hidden = false;
+  });
+
+  document.addEventListener('click', (e) => {
+    const wrap = $('#global-search-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      dropdown.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      input.value = '';
+      dropdown.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+      input.blur();
+    }
+  });
+}
+
+async function runGlobalSearch(query) {
+  const dropdown = $('#global-search-dropdown');
+  const input = $('#global-search');
+  const seq = ++globalSearchSeq;
+  dropdown.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  dropdown.innerHTML = '';
+  dropdown.append(
+    el('div', { class: 'gs-loading' }, `searching "${query}"…`)
+  );
+
+  const body = JSON.stringify({ query, limit: 6 });
+  const endpoints = [
+    ['entities', '/api/v1/entities/search'],
+    ['preferences', '/api/v1/preferences/search'],
+    ['facts', '/api/v1/facts/search'],
+    ['traces', '/api/v1/traces/search'],
+    ['messages', '/api/v1/messages/search'],
+  ];
+
+  const results = await Promise.all(
+    endpoints.map(async ([kind, path]) => {
+      try {
+        const r = await api(path, { method: 'POST', body });
+        return { kind, rows: r };
+      } catch (err) {
+        return { kind, rows: [], error: err.message };
+      }
+    })
+  );
+
+  // Ignore stale responses
+  if (seq !== globalSearchSeq) return;
+
+  dropdown.innerHTML = '';
+  const total = results.reduce((n, r) => n + r.rows.length, 0);
+  if (total === 0) {
+    dropdown.append(
+      el('div', { class: 'gs-empty' }, [
+        `No matches for `,
+        el('code', {}, query),
+        ` in ${settings.projectId} / ${settings.userId}.`,
+      ])
+    );
+    return;
+  }
+
+  for (const group of results) {
+    if (!group.rows.length) continue;
+    const section = el('div', { class: 'gs-group' });
+    section.append(
+      el('div', { class: 'gs-group__head' }, [
+        el('span', { class: 'gs-group__kind', dataset: { kind: group.kind } }, group.kind),
+        el('span', { class: 'gs-group__count' }, String(group.rows.length)),
+      ])
+    );
+    for (const row of group.rows) {
+      section.append(renderGlobalSearchHit(group.kind, row));
+    }
+    dropdown.append(section);
+  }
+}
+
+function renderGlobalSearchHit(kind, row) {
+  const meta = row.metadata ?? {};
+  const score = typeof row.score === 'number' ? row.score.toFixed(2) : '—';
+  const scope = resolveHitScope(row);
+  let title = '';
+  let sub = '';
+
+  switch (kind) {
+    case 'entities':
+      title = meta.name ?? row.id;
+      sub = meta.entity_type ?? '';
+      break;
+    case 'preferences':
+      title = meta.category ? `[${meta.category}]` : 'preference';
+      sub = row.id;
+      break;
+    case 'facts':
+      title = [meta.subject, meta.predicate].filter(Boolean).join(' · ') || 'fact';
+      sub = row.id;
+      break;
+    case 'traces':
+      title = meta.task ?? 'trace';
+      sub = meta.success === 'true' ? 'success' : meta.success === 'false' ? 'failure' : '—';
+      break;
+    case 'messages':
+      title = meta.role ? `${meta.role}:` : 'message';
+      sub = meta.content_preview ?? row.id;
+      break;
+    default:
+      title = row.id;
+  }
+
+  const hit = el('button', {
+    type: 'button',
+    class: 'gs-hit',
+    dataset: { kind, id: row.id },
+    onClick: () => onGlobalHitClick(kind, row),
+  }, [
+    el('span', { class: 'gs-hit__title' }, String(title)),
+    el('span', { class: 'gs-hit__sub' }, String(sub)),
+    el('span', { class: `gs-hit__scope gs-hit__scope--${scope}` }, scope),
+    el('span', { class: 'gs-hit__score' }, score),
+  ]);
+  return hit;
+}
+
+function resolveHitScope(row) {
+  // scopeLevel from cascadingSearch: 0 = project+user, 1 = user, 2 = project, 3 = global.
+  if (row.scopeLevel === undefined) return 'scope';
+  if (row.scopeLevel === 0) return 'project·user';
+  if (row.scopeLevel === 1) return 'user';
+  if (row.scopeLevel === 2) return 'project';
+  return 'global';
+}
+
+async function onGlobalHitClick(kind, row) {
+  closeGlobalSearchDropdown();
+  if (kind === 'entities') {
+    const local = graph.byId.get(row.id);
+    if (local) {
+      selectEntity(local);
+      return;
+    }
+    // Entity is out of current snapshot — pull it + expand it into the graph
+    try {
+      const ent = await api(`/api/v1/entities/${encodeURIComponent(row.id)}`);
+      graph.setData([...graph.nodes, ent], graph.edges);
+      const local2 = graph.byId.get(ent.id);
+      if (local2) selectEntity(local2);
+    } catch (err) {
+      showToast(`Failed to load entity: ${err.message}`);
+    }
+  } else if (kind === 'traces') {
+    openTraceInspector(row.id);
+  } else {
+    // Facts, prefs, messages: toast the id so the user can act on it.
+    showToast(`${kind} ${row.id.slice(0, 8)}… (open the list below to inspect)`, 'info');
+  }
+}
+
+function closeGlobalSearchDropdown() {
+  const dropdown = $('#global-search-dropdown');
+  if (dropdown) dropdown.hidden = true;
+  $('#global-search')?.setAttribute('aria-expanded', 'false');
+}
+
+// ----- Tool stats panel -----------------------------------------------------
+
+async function loadToolStats() {
+  try {
+    const stats = await api('/api/v1/tool-stats');
+    renderToolStats(stats);
+  } catch (err) {
+    renderToolStats([]);
+    showToast(`Tool stats failed: ${err.message}`);
+  }
+}
+
+function renderToolStats(stats) {
+  const body = $('#tool-stats-body');
+  const countEl = $('#tool-stats-count');
+  if (!body || !countEl) return;
+  countEl.textContent = stats.length;
+  body.innerHTML = '';
+  if (!stats.length) {
+    body.append(
+      el('p', { class: 'tool-stats__empty' }, [
+        'No tool calls recorded in ',
+        el('code', { style: 'color: var(--proc);' }, settings.projectId),
+        ' / ',
+        el('code', { style: 'color: var(--proc);' }, settings.userId),
+        '.',
+      ])
+    );
+    return;
+  }
+
+  const table = el('table', { class: 'tool-stats__table' });
+  const thead = el('thead', {}, [
+    el('tr', {}, [
+      el('th', {}, 'tool'),
+      el('th', { class: 'num' }, 'calls'),
+      el('th', { class: 'num' }, 'success'),
+      el('th', { class: 'num' }, 'avg'),
+      el('th', { class: 'num' }, 'total'),
+      el('th', {}, 'last used'),
+    ]),
+  ]);
+  const tbody = el('tbody', {});
+  for (const s of stats) {
+    const total = s.total_calls ?? 0;
+    const succ = s.success_count ?? 0;
+    const rate = total > 0 ? Math.round((succ / total) * 100) : 0;
+    const avg = total > 0 ? Math.round((s.total_duration_ms ?? 0) / total) : null;
+    const tone = rate >= 95 ? 'ok' : rate >= 75 ? 'warn' : 'fail';
+    tbody.append(
+      el('tr', {}, [
+        el('td', { class: 'tool-stats__name' }, s.tool_name),
+        el('td', { class: 'num' }, String(total)),
+        el('td', { class: `num tool-stats__rate tool-stats__rate--${tone}` }, `${rate}%`),
+        el('td', { class: 'num' }, avg == null ? '—' : fmtDuration(avg)),
+        el('td', { class: 'num' }, fmtDuration(s.total_duration_ms ?? 0)),
+        el('td', {}, fmtTime(s.last_used_at)),
+      ])
+    );
+  }
+  table.append(thead, tbody);
+  body.append(table);
+}
+
+// ----- Promotion UI ---------------------------------------------------------
+
+/**
+ * Build a "⇡ promote" button. If the record was already promoted (has
+ * promoted_from set), the button renders as disabled with a "promoted" label
+ * so we don't mint duplicates.
+ */
+function promoteButton(type, id, promotedFrom) {
+  const alreadyPromoted = promotedFrom != null && promotedFrom !== '';
+  if (alreadyPromoted) {
+    return el('span', {
+      class: 'record-card__promote record-card__promote--done',
+      title: `already promoted from ${promotedFrom}`,
+    }, 'promoted');
+  }
+  return el('button', {
+    type: 'button',
+    class: 'record-card__promote',
+    title: `Promote this ${type} to global scope`,
+    onClick: (e) => {
+      const card = e.currentTarget.closest('.record-card, .detail-card');
+      openPromoteForm(card, type, id);
+    },
+  }, '⇡ promote');
+}
+
+function openPromoteForm(card, type, id) {
+  if (!card) return;
+  // Avoid stacking multiple forms
+  card.querySelectorAll('.promote-form').forEach((f) => f.remove());
+  const form = el('form', {
+    class: 'promote-form',
+    onSubmit: async (e) => {
+      e.preventDefault();
+      const reason = form.reason.value.trim();
+      if (!reason) {
+        form.reason.focus();
+        return;
+      }
+      const target = form.target.value;
+      await doPromote(type, id, reason, target, form);
+    },
+  });
+  form.append(
+    el('div', { class: 'promote-form__row' }, [
+      el('label', {}, [
+        'reason',
+        el('input', {
+          name: 'reason',
+          placeholder: 'why is this global-worthy?',
+          required: 'true',
+        }),
+      ]),
+      el('label', {}, [
+        'target',
+        (() => {
+          const sel = el('select', { name: 'target' });
+          sel.append(
+            el('option', { value: 'global' }, 'global'),
+            el('option', { value: 'user' }, 'user')
+          );
+          return sel;
+        })(),
+      ]),
+    ]),
+    el('div', { class: 'promote-form__actions' }, [
+      el('button', {
+        type: 'button',
+        class: 'btn btn--ghost',
+        onClick: () => form.remove(),
+      }, 'cancel'),
+      el('button', { type: 'submit', class: 'btn btn--primary' }, 'promote'),
+    ])
+  );
+  card.append(form);
+  form.reason.focus();
+}
+
+async function doPromote(type, id, reason, target, form) {
+  const submit = form.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  submit.textContent = 'promoting…';
+  try {
+    const res = await api('/api/v1/promote', {
+      method: 'POST',
+      body: JSON.stringify({ type, id, reason, target }),
+    });
+    const promotedId = res.promotedId ?? res.globalId;
+    showToast(
+      `promoted to ${target} · ${promotedId ? promotedId.slice(0, 8) : 'ok'}`,
+      'success'
+    );
+    form.remove();
+    // Refresh so the "promoted" badge renders on the original card too.
+    void refresh();
+  } catch (err) {
+    submit.disabled = false;
+    submit.textContent = 'promote';
+    showToast(err.message);
+  }
+}
+
+// ----- Keyboard navigation (j/k across visible entities) --------------------
+
+function moveSelection(delta) {
+  // Alphabetical order among currently-visible entities so j/k is predictable.
+  const visible = graph.nodes
+    .filter((n) => graph.typeFilter.has(n.entity_type))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!visible.length) return;
+  const currentIdx = visible.findIndex((n) => n.id === graph.selectedId);
+  const nextIdx =
+    currentIdx < 0
+      ? (delta > 0 ? 0 : visible.length - 1)
+      : (currentIdx + delta + visible.length) % visible.length;
+  selectEntity(visible[nextIdx]);
+}
+
 // ----- Refresh / load -------------------------------------------------------
 
 async function refresh(opts = {}) {
@@ -1651,10 +2268,11 @@ async function refresh(opts = {}) {
     // Snapshot covers the graph + stream tiers; full prefs/facts come from
     // their list endpoints so the inline Records section can show everything,
     // not just the first 15.
-    const [snapshot, preferences, facts] = await Promise.all([
+    const [snapshot, preferences, facts, toolStats] = await Promise.all([
       api('/api/v1/snapshot?entity_limit=200&relation_limit=500'),
       api('/api/v1/preferences'),
       api('/api/v1/facts'),
+      api('/api/v1/tool-stats').catch(() => []),
     ]);
     state.snapshot = snapshot;
 
@@ -1673,6 +2291,7 @@ async function refresh(opts = {}) {
     renderMessages(snapshot.recent_messages);
     renderTraces(snapshot.recent_traces);
     renderRecordsView(preferences, facts);
+    renderToolStats(toolStats);
 
     setStatus('ok', 'connected');
   } catch (err) {
@@ -1693,6 +2312,8 @@ async function init() {
   bindViewSwitch();
   bindRecordsSearch();
   bindLogin();
+  bindGlobalSearch();
+  bindTraceInspector();
   updateScopeDisplay();
   renderTypeFilters();
 
@@ -1711,20 +2332,50 @@ async function init() {
   $('#refresh').addEventListener('click', () => void refresh());
 
   document.addEventListener('keydown', (e) => {
+    const onBody = document.activeElement === document.body;
     if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      $('#search-input').focus();
-    } else if (e.key === 'r' && !e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
+      $('#global-search').focus();
+    } else if (e.key === '/' && onBody) {
+      e.preventDefault();
+      $('#global-search').focus();
+    } else if (e.key === 'r' && !e.metaKey && !e.ctrlKey && onBody) {
       void refresh();
-    } else if (e.key === 's' && !e.metaKey && !e.ctrlKey && document.activeElement === document.body) {
+    } else if (e.key === 's' && !e.metaKey && !e.ctrlKey && onBody) {
       $('#settings-toggle').click();
+    } else if ((e.key === 'j' || e.key === 'J') && !e.metaKey && !e.ctrlKey && onBody && $('#trace-inspector').hidden) {
+      e.preventDefault();
+      moveSelection(1);
+    } else if ((e.key === 'k' || e.key === 'K') && !e.metaKey && !e.ctrlKey && onBody && $('#trace-inspector').hidden) {
+      e.preventDefault();
+      moveSelection(-1);
+    } else if (e.key === 'e' && !e.metaKey && !e.ctrlKey && onBody && graph.selectedId) {
+      const node = graph.byId.get(graph.selectedId);
+      if (node) {
+        const card = $('#detail').querySelector('.detail-card');
+        if (card) openEntityEdit(card, node);
+      }
+    } else if (e.key === 'x' && !e.metaKey && !e.ctrlKey && onBody && graph.selectedId) {
+      const node = graph.byId.get(graph.selectedId);
+      if (node) void expandEntitySubgraph(node);
     } else if (e.key === 'Escape') {
-      $('#drawer').hidden = true;
-      $('#settings-toggle').setAttribute('aria-expanded', 'false');
+      if (!$('#trace-inspector').hidden) {
+        closeTraceInspector();
+      } else if (!$('#global-search-dropdown').hidden) {
+        closeGlobalSearchDropdown();
+      } else {
+        $('#drawer').hidden = true;
+        $('#settings-toggle').setAttribute('aria-expanded', 'false');
+      }
     }
   });
 
   void refresh();
+}
+
+function bindTraceInspector() {
+  $('#ti-close')?.addEventListener('click', closeTraceInspector);
+  $('#ti-backdrop')?.addEventListener('click', closeTraceInspector);
 }
 
 if (document.readyState === 'loading') {
