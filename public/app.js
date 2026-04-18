@@ -612,6 +612,43 @@ function renderStats(stats) {
 
 // ----- Streams (messages & traces) ------------------------------------------
 
+function renderRecords(preferences, facts) {
+  const list = $('#stream-records');
+  const total = preferences.length + facts.length;
+  $('#stream-records-count').textContent = total;
+  list.innerHTML = '';
+  if (total === 0) {
+    list.append(el('li', { class: 'stream__empty' }, 'No long-term records yet.'));
+    return;
+  }
+  // Interleave by recency. Preferences use updated_at, facts use created_at.
+  const items = [
+    ...preferences.map((p) => ({ kind: 'pref', when: p.updated_at, row: p })),
+    ...facts.map((f) => ({ kind: 'fact', when: f.created_at, row: f })),
+  ].sort((a, b) => (a.when < b.when ? 1 : -1));
+
+  for (const item of items) {
+    const body = el('span', { class: 'record__body' });
+    if (item.kind === 'pref') {
+      body.append(
+        el('strong', {}, item.row.category),
+        document.createTextNode(item.row.preference)
+      );
+    } else {
+      body.append(
+        el('strong', {}, item.row.predicate),
+        document.createTextNode(`${item.row.subject} → ${item.row.object}`)
+      );
+    }
+    list.append(
+      el('li', { class: 'record' }, [
+        el('span', { class: 'record__kind', dataset: { kind: item.kind } }, item.kind),
+        body,
+      ])
+    );
+  }
+}
+
 function renderMessages(messages) {
   const list = $('#stream-messages');
   $('#stream-messages-count').textContent = messages.length;
@@ -823,7 +860,6 @@ function bindTraversal() {
 async function refresh() {
   setStatus('loading', 'fetching');
   $('#empty-graph').hidden = true;
-  $('#loading-graph').hidden = false;
   try {
     const snapshot = await api('/api/v1/snapshot?entity_limit=200&relation_limit=500');
     state.snapshot = snapshot;
@@ -838,16 +874,14 @@ async function refresh() {
     renderTypeFilters();
 
     graph.setData(snapshot.entities, snapshot.relations);
-    $('#loading-graph').hidden = true;
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
+    renderRecords(snapshot.recent_preferences, snapshot.recent_facts);
     renderMessages(snapshot.recent_messages);
     renderTraces(snapshot.recent_traces);
 
-    $('#last-fetched').textContent = `synced ${fmtTime(new Date().toISOString())}`;
     setStatus('ok', 'connected');
   } catch (err) {
-    $('#loading-graph').hidden = true;
     $('#empty-graph').hidden = false;
     setStatus('error', 'offline');
     showToast(err.message);

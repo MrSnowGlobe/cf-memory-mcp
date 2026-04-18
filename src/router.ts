@@ -519,6 +519,8 @@ app.get('/api/v1/snapshot', async (c) => {
     relationLimit: num(c.req.query('relation_limit')),
     messageLimit: num(c.req.query('message_limit')),
     traceLimit: num(c.req.query('trace_limit')),
+    preferenceLimit: num(c.req.query('preference_limit')),
+    factLimit: num(c.req.query('fact_limit')),
   });
   return c.json(snapshot);
 });

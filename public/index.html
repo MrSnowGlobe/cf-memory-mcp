@@ -19,48 +19,18 @@
   </head>
 
   <body>
-    <!-- Decorative grain + grid layers -->
-    <div class="bg-grain" aria-hidden="true"></div>
+    <!-- Subtle background grid -->
     <div class="bg-grid" aria-hidden="true"></div>
-
-    <!-- Top corner ornaments — pure decoration, like a chart border -->
-    <div class="corner corner--tl" aria-hidden="true">
-      <span class="corner__mark">N 41° 12′</span>
-    </div>
-    <div class="corner corner--tr" aria-hidden="true">
-      <span class="corner__mark">W 73° 58′</span>
-    </div>
-    <div class="corner corner--bl" aria-hidden="true">
-      <span class="corner__mark">FOLIO IV</span>
-    </div>
-    <div class="corner corner--br" aria-hidden="true">
-      <span class="corner__mark" id="last-fetched">—</span>
-    </div>
 
     <!-- ============================================================ -->
     <!-- Header                                                        -->
     <!-- ============================================================ -->
     <header class="masthead">
-      <div class="masthead__brand">
-        <span class="masthead__sigil" aria-hidden="true">
-          <svg viewBox="0 0 40 40" width="34" height="34">
-            <circle cx="20" cy="20" r="18" fill="none" stroke="currentColor" stroke-width="0.6" />
-            <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" stroke-width="0.6" stroke-dasharray="2 3" />
-            <circle cx="20" cy="20" r="4" fill="currentColor" />
-            <line x1="20" y1="2" x2="20" y2="8" stroke="currentColor" stroke-width="0.6" />
-            <line x1="20" y1="32" x2="20" y2="38" stroke="currentColor" stroke-width="0.6" />
-            <line x1="2" y1="20" x2="8" y2="20" stroke="currentColor" stroke-width="0.6" />
-            <line x1="32" y1="20" x2="38" y2="20" stroke="currentColor" stroke-width="0.6" />
-          </svg>
-        </span>
-        <div class="masthead__title">
-          <h1>
-            <span class="masthead__primary">Observatory</span>
-            <span class="masthead__divider">·</span>
-            <span class="masthead__secondary">cf&#8209;agent&#8209;memory</span>
-          </h1>
-          <p class="masthead__tag">A chart of what the agent remembers, in three tiers.</p>
-        </div>
+      <div class="masthead__title">
+        <h1>
+          <span class="masthead__primary">Observatory</span>
+          <span class="masthead__secondary">cf&#8209;agent&#8209;memory</span>
+        </h1>
       </div>
 
       <div class="masthead__instruments">
@@ -261,12 +231,8 @@
           <canvas id="graph" width="800" height="600"></canvas>
           <div class="chart__overlay" id="graph-overlay">
             <div class="empty" id="empty-graph" hidden>
-              <p class="empty__line">The observatory is dark.</p>
-              <p class="empty__sub">No entities are charted in this scope. Add one through the API to begin.</p>
-            </div>
-            <div class="loading" id="loading-graph">
-              <span class="loading__pulse"></span>
-              <span class="loading__label">listening to the worker…</span>
+              <p class="empty__line">No entities in this scope.</p>
+              <p class="empty__sub">Add one through the API to begin.</p>
             </div>
           </div>
           <div class="chart__legend" id="hover-legend" hidden></div>
@@ -288,11 +254,22 @@
     <!-- Bottom strips: messages + traces                              -->
     <!-- ============================================================ -->
     <section class="streams" aria-label="Recent activity">
+      <article class="stream stream--long" data-tier="long">
+        <header class="stream__head">
+          <h3>
+            <span class="stream__tier">long&#8209;term</span>
+            records
+          </h3>
+          <span class="stream__count" id="stream-records-count">0</span>
+        </header>
+        <ol class="stream__body" id="stream-records"></ol>
+      </article>
+
       <article class="stream stream--short" data-tier="short">
         <header class="stream__head">
           <h3>
             <span class="stream__tier">short&#8209;term</span>
-            recent transmissions
+            messages
           </h3>
           <span class="stream__count" id="stream-messages-count">0</span>
         </header>
@@ -303,7 +280,7 @@
         <header class="stream__head">
           <h3>
             <span class="stream__tier">procedural</span>
-            reasoning traces
+            traces
           </h3>
           <span class="stream__count" id="stream-traces-count">0</span>
         </header>

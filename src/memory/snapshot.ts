@@ -3,6 +3,8 @@ import type {
   EntityRow,
   RelationRow,
   TraceRow,
+  PreferenceRow,
+  FactRow,
 } from '../types';
 
 /** Subset of MessageRow with the parent session_id always present. */
@@ -31,6 +33,8 @@ export interface GraphSnapshot {
   relations: RelationRow[];
   recent_messages: SnapshotMessage[];
   recent_traces: TraceRow[];
+  recent_preferences: PreferenceRow[];
+  recent_facts: FactRow[];
 }
 
 export interface SnapshotOptions {
@@ -42,6 +46,10 @@ export interface SnapshotOptions {
   messageLimit?: number;
   /** Max recent traces. Hard cap 100. Default 20. */
   traceLimit?: number;
+  /** Max recent preferences. Hard cap 100. Default 15. */
+  preferenceLimit?: number;
+  /** Max recent (non-expired) facts. Hard cap 100. Default 15. */
+  factLimit?: number;
 }
 
 /**
@@ -62,12 +70,17 @@ export async function getGraphSnapshot(
   const relationLimit = clamp(opts.relationLimit ?? 500, 1, 1000);
   const messageLimit = clamp(opts.messageLimit ?? 20, 1, 100);
   const traceLimit = clamp(opts.traceLimit ?? 20, 1, 100);
+  const preferenceLimit = clamp(opts.preferenceLimit ?? 15, 1, 100);
+  const factLimit = clamp(opts.factLimit ?? 15, 1, 100);
+  const nowIso = new Date().toISOString();
 
   const [
     entitiesRes,
     relationsRes,
     messagesRes,
     tracesRes,
+    preferencesRes,
+    factsRes,
     countsRes,
   ] = await Promise.all([
     env.DB.prepare(
@@ -117,6 +130,27 @@ export async function getGraphSnapshot(
       .bind(projectId, userId, traceLimit)
       .all<TraceRow>(),
 
+    env.DB.prepare(
+      `SELECT * FROM preferences
+       WHERE project_id IN (?, 'global')
+         AND user_id IN (?, 'global', 'default')
+       ORDER BY updated_at DESC
+       LIMIT ?`
+    )
+      .bind(projectId, userId, preferenceLimit)
+      .all<PreferenceRow>(),
+
+    env.DB.prepare(
+      `SELECT * FROM facts
+       WHERE project_id IN (?, 'global')
+         AND user_id IN (?, 'global', 'default')
+         AND (valid_until IS NULL OR valid_until > ?)
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+      .bind(projectId, userId, nowIso, factLimit)
+      .all<FactRow>(),
+
     // Single-row aggregate of every count we care about. Cheaper than
     // five round-trips because D1 batches the subqueries server-side.
     env.DB.prepare(
@@ -140,7 +174,7 @@ export async function getGraphSnapshot(
         projectId, userId,                                 // entities
         projectId, userId, projectId, userId,              // relations
         projectId, userId,                                 // preferences
-        projectId, userId, new Date().toISOString(),       // facts
+        projectId, userId, nowIso,                         // facts
         projectId, userId,                                 // sessions
         projectId, userId,                                 // messages
         projectId, userId                                  // traces
@@ -165,6 +199,8 @@ export async function getGraphSnapshot(
     relations: relationsRes.results,
     recent_messages: messagesRes.results,
     recent_traces: tracesRes.results,
+    recent_preferences: preferencesRes.results,
+    recent_facts: factsRes.results,
   };
 }
 
