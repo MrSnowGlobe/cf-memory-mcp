@@ -1,6 +1,7 @@
 import type { Bindings, EntityRow } from '../types';
 import { getEmbedding } from './embeddings';
 import { cascadingSearch } from './vectorize';
+import { RESOLUTION } from '../config';
 import { distance } from 'fastest-levenshtein';
 
 /**
@@ -65,14 +66,15 @@ export async function resolveEntity(
     return exactMatch;
   }
 
-  // Stage 2 — Fuzzy match (bounded to prevent loading entire table)
+  // Stage 2 — Fuzzy match (bounded by config; prefer recent updates when truncated)
   const candidates = await env.DB.prepare(
     `SELECT * FROM entities
      WHERE entity_type = ? AND project_id IN (?, 'global')
      AND user_id IN (?, 'global', 'default')
-     LIMIT 500`
+     ORDER BY updated_at DESC
+     LIMIT ?`
   )
-    .bind(entityType, projectId, userId)
+    .bind(entityType, projectId, userId, RESOLUTION.fuzzyCandidateLimit)
     .all<EntityRow>();
 
   let bestFuzzy: EntityRow | null = null;
@@ -81,7 +83,7 @@ export async function resolveEntity(
 
   for (const candidate of candidates.results) {
     const score = fuzzyMatch(name, candidate.name);
-    if (score >= 0.85) {
+    if (score >= RESOLUTION.fuzzyThreshold) {
       const priority = scopePriority(candidate, projectId, userId);
 
       if (
@@ -110,7 +112,7 @@ export async function resolveEntity(
   );
 
   const topResult = searchResults[0];
-  if (topResult && topResult.score >= 0.8) {
+  if (topResult && topResult.score >= RESOLUTION.semanticThreshold) {
     const entity = await env.DB.prepare(
       `SELECT * FROM entities WHERE id = ?`
     )

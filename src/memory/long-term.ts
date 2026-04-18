@@ -13,7 +13,13 @@ import type {
   AddFactInput,
 } from '../utils/validation';
 import { generateId } from '../utils/ids';
-import { getEmbedding } from '../services/embeddings';
+import { NotFoundError } from '../utils/errors';
+import {
+  getEmbedding,
+  entityEmbeddingText,
+  preferenceEmbeddingText,
+  factEmbeddingText,
+} from '../services/embeddings';
 import {
   vectorInsert,
   vectorDelete,
@@ -53,8 +59,10 @@ export class LongTermMemory {
     const metaJson = JSON.stringify(input.metadata ?? {});
 
     // 3. Generate embedding
-    const embeddingText = `${input.name} ${input.entity_type} ${input.description ?? ''}`;
-    const embedding = await getEmbedding(embeddingText, this.env.AI);
+    const embedding = await getEmbedding(
+      entityEmbeddingText(input.name, input.description ?? null),
+      this.env.AI
+    );
 
     // 4. Insert into D1
     await this.env.DB.prepare(
@@ -116,9 +124,7 @@ export class LongTermMemory {
     // 1. Verify entity exists and belongs to this project
     const existing = await this.getEntity(id);
     if (!existing) {
-      throw new Error(
-        `Entity ${id} not found in project ${this.projectId}`
-      );
+      throw new NotFoundError(`Entity ${id}`);
     }
 
     // 2. Build dynamic SET clause
@@ -166,8 +172,10 @@ export class LongTermMemory {
       const newDesc = updates.description !== undefined
         ? updates.description
         : existing.description;
-      const embeddingText = `${newName} ${newType} ${newDesc ?? ''}`;
-      const embedding = await getEmbedding(embeddingText, this.env.AI);
+      const embedding = await getEmbedding(
+        entityEmbeddingText(newName, newDesc),
+        this.env.AI
+      );
 
       // Delete old vector and insert new one
       if (existing.vector_id) {
@@ -244,35 +252,19 @@ export class LongTermMemory {
     const now = new Date().toISOString();
     const metaJson = JSON.stringify(metadata ?? {});
 
-    // Use INSERT OR IGNORE to handle duplicates without race conditions
-    await this.env.DB.prepare(
-      `INSERT OR IGNORE INTO entity_relations (id, source_entity_id, target_entity_id, relation_type, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+    const row = await this.env.DB.prepare(
+      `INSERT INTO entity_relations (id, source_entity_id, target_entity_id, relation_type, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source_entity_id, target_entity_id, relation_type) DO UPDATE SET id = id
+       RETURNING *`
     )
       .bind(id, sourceId, targetId, relationType, metaJson, now)
-      .run();
-
-    // If the insert was ignored (duplicate), fetch the existing row
-    const existing = await this.env.DB.prepare(
-      `SELECT * FROM entity_relations
-       WHERE source_entity_id = ? AND target_entity_id = ? AND relation_type = ?
-       LIMIT 1`
-    )
-      .bind(sourceId, targetId, relationType)
       .first<RelationRow>();
 
-    if (existing) {
-      return existing;
+    if (!row) {
+      throw new Error('Failed to insert or retrieve relation');
     }
-
-    return {
-      id,
-      source_entity_id: sourceId,
-      target_entity_id: targetId,
-      relation_type: relationType,
-      metadata: metaJson,
-      created_at: now,
-    };
+    return row;
   }
 
   async getRelations(entityId: string, limit: number = 100): Promise<RelationRow[]> {
@@ -296,8 +288,10 @@ export class LongTermMemory {
     const confidence = input.confidence ?? 1.0;
 
     // Generate embedding
-    const embeddingText = `${input.category}: ${input.preference}${input.context ? ' (' + input.context + ')' : ''}`;
-    const embedding = await getEmbedding(embeddingText, this.env.AI);
+    const embedding = await getEmbedding(
+      preferenceEmbeddingText(input.category, input.preference, input.context ?? null),
+      this.env.AI
+    );
 
     // Insert into D1
     await this.env.DB.prepare(
@@ -390,8 +384,10 @@ export class LongTermMemory {
     const confidence = input.confidence ?? 1.0;
 
     // Generate embedding
-    const embeddingText = `${input.subject} ${input.predicate} ${input.object}`;
-    const embedding = await getEmbedding(embeddingText, this.env.AI);
+    const embedding = await getEmbedding(
+      factEmbeddingText(input.subject, input.predicate, input.object),
+      this.env.AI
+    );
 
     // Insert into D1
     await this.env.DB.prepare(
@@ -487,10 +483,14 @@ export class LongTermMemory {
   async invalidateFact(id: string, validUntil?: string): Promise<void> {
     const until = validUntil ?? new Date().toISOString();
 
-    await this.env.DB.prepare(
+    const result = await this.env.DB.prepare(
       'UPDATE facts SET valid_until = ? WHERE id = ? AND project_id = ? AND user_id = ?'
     )
       .bind(until, id, this.projectId, this.userId)
       .run();
+
+    if (result.meta.changes === 0) {
+      throw new NotFoundError(`Fact ${id}`);
+    }
   }
 }

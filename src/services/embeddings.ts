@@ -1,13 +1,11 @@
-const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5' as const;
-const MAX_EMBEDDING_CHARS = 512;
+import { EMBEDDING } from '../config';
 
-/** Truncate text to a safe length for the embedding model. */
 function truncateForEmbedding(text: string): string {
-  return text.length > MAX_EMBEDDING_CHARS ? text.slice(0, MAX_EMBEDDING_CHARS) : text;
+  return text.length > EMBEDDING.maxChars ? text.slice(0, EMBEDDING.maxChars) : text;
 }
 
 export async function getEmbedding(text: string, ai: Ai): Promise<number[]> {
-  const result = await ai.run(EMBEDDING_MODEL, { text: [truncateForEmbedding(text)] });
+  const result = await ai.run(EMBEDDING.model, { text: [truncateForEmbedding(text)] });
   if ('data' in result && result.data) {
     const first = result.data[0];
     if (!first) {
@@ -20,10 +18,9 @@ export async function getEmbedding(text: string, ai: Ai): Promise<number[]> {
 
 export async function getEmbeddings(texts: string[], ai: Ai): Promise<number[][]> {
   const results: number[][] = [];
-  // Batch in chunks of 100 (Workers AI limit)
-  for (let i = 0; i < texts.length; i += 100) {
-    const batch = texts.slice(i, i + 100).map(truncateForEmbedding);
-    const result = await ai.run(EMBEDDING_MODEL, { text: batch });
+  for (let i = 0; i < texts.length; i += EMBEDDING.batchSize) {
+    const batch = texts.slice(i, i + EMBEDDING.batchSize).map(truncateForEmbedding);
+    const result = await ai.run(EMBEDDING.model, { text: batch });
     if ('data' in result && result.data) {
       results.push(...result.data);
     } else {
@@ -31,4 +28,20 @@ export async function getEmbeddings(texts: string[], ai: Ai): Promise<number[][]
     }
   }
   return results;
+}
+
+export function entityEmbeddingText(name: string, description: string | null): string {
+  return description ? `${name}. ${description}` : name;
+}
+
+export function preferenceEmbeddingText(
+  category: string,
+  preference: string,
+  context: string | null
+): string {
+  return context ? `${category}: ${preference} (${context})` : `${category}: ${preference}`;
+}
+
+export function factEmbeddingText(subject: string, predicate: string, object: string): string {
+  return `${subject} ${predicate} ${object}`;
 }
