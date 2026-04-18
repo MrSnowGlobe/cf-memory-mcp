@@ -1,4 +1,4 @@
-import type { Bindings, NeighborRow } from '../types';
+import type { Bindings, NeighborRow, RelationRow } from '../types';
 import { GRAPH } from '../config';
 
 export type TraversalDirection = 'out' | 'in' | 'both';
@@ -101,4 +101,56 @@ export async function traverseRelations(
     .all<NeighborRow>();
 
   return result.results;
+}
+
+export interface SubgraphResult {
+  entities: NeighborRow[];
+  relations: RelationRow[];
+}
+
+/**
+ * Traversal + edges. Returns both the reachable entities (including the root
+ * with hop_distance=0) and every relation that connects any pair of those
+ * entities. Suitable for folding a subgraph into a visualizer canvas.
+ */
+export async function traverseSubgraph(
+  env: Bindings,
+  rootId: string,
+  projectId: string,
+  userId: string,
+  opts: TraverseOptions = {}
+): Promise<SubgraphResult> {
+  const neighbors = await traverseRelations(env, rootId, projectId, userId, opts);
+
+  const rootEntity = await env.DB.prepare(
+    `SELECT
+       e.id, e.project_id, e.user_id, e.name, e.entity_type, e.subtype,
+       e.description, e.promoted_from, e.metadata, e.created_at, e.updated_at, e.vector_id
+     FROM entities e
+     WHERE e.id = ?
+       AND e.project_id IN (?, 'global')
+       AND e.user_id IN (?, 'global', 'default')`
+  )
+    .bind(rootId, projectId, userId)
+    .first<Omit<NeighborRow, 'hop_distance'>>();
+
+  const entities: NeighborRow[] = rootEntity
+    ? [{ ...rootEntity, hop_distance: 0 }, ...neighbors]
+    : neighbors;
+
+  if (entities.length === 0) {
+    return { entities: [], relations: [] };
+  }
+
+  const ids = entities.map((e) => e.id);
+  const placeholders = ids.map(() => '?').join(', ');
+  const relationsRes = await env.DB.prepare(
+    `SELECT * FROM entity_relations
+     WHERE source_entity_id IN (${placeholders})
+       AND target_entity_id IN (${placeholders})`
+  )
+    .bind(...ids, ...ids)
+    .all<RelationRow>();
+
+  return { entities, relations: relationsRes.results };
 }

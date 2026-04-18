@@ -29,7 +29,12 @@ import {
   getWriteNamespace,
 } from '../services/vectorize';
 import { resolveEntity } from '../services/resolution';
-import { traverseRelations, type TraverseOptions } from '../services/graph';
+import {
+  traverseRelations,
+  traverseSubgraph,
+  type TraverseOptions,
+  type SubgraphResult,
+} from '../services/graph';
 import { publishEvent } from '../services/events';
 import type { NeighborRow } from '../types';
 
@@ -319,6 +324,13 @@ export class LongTermMemory {
     opts?: TraverseOptions
   ): Promise<NeighborRow[]> {
     return traverseRelations(this.env, rootId, this.projectId, this.userId, opts);
+  }
+
+  async traverseSubgraph(
+    rootId: string,
+    opts?: TraverseOptions
+  ): Promise<SubgraphResult> {
+    return traverseSubgraph(this.env, rootId, this.projectId, this.userId, opts);
   }
 
   // ---------------------------------------------------------------------------

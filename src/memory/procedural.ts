@@ -20,6 +20,15 @@ import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
 import { vectorInsert, cascadingSearch, getWriteNamespace } from '../services/vectorize';
 import { publishEvent } from '../services/events';
 
+export interface StepWithCalls extends StepRow {
+  tool_calls: ToolCallRow[];
+}
+
+export interface TraceDetail {
+  trace: TraceRow;
+  steps: StepWithCalls[];
+}
+
 export class ProceduralMemory {
   constructor(
     private env: Bindings,
@@ -170,6 +179,49 @@ export class ProceduralMemory {
       this.userId,
       limit
     );
+  }
+
+  async getTraceDetail(id: string): Promise<TraceDetail | null> {
+    const trace = await this.env.DB.prepare(
+      `SELECT * FROM reasoning_traces
+       WHERE id = ?
+         AND project_id IN (?, 'global')
+         AND user_id IN (?, 'global', 'default')`
+    )
+      .bind(id, this.projectId, this.userId)
+      .first<TraceRow>();
+
+    if (!trace) return null;
+
+    const [stepsRes, toolCallsRes] = await Promise.all([
+      this.env.DB.prepare(
+        'SELECT * FROM reasoning_steps WHERE trace_id = ? ORDER BY step_number ASC'
+      )
+        .bind(id)
+        .all<StepRow>(),
+      this.env.DB.prepare(
+        `SELECT tc.* FROM tool_calls tc
+         JOIN reasoning_steps rs ON rs.id = tc.step_id
+         WHERE rs.trace_id = ?
+         ORDER BY tc.created_at ASC`
+      )
+        .bind(id)
+        .all<ToolCallRow>(),
+    ]);
+
+    const callsByStep = new Map<string, ToolCallRow[]>();
+    for (const call of toolCallsRes.results) {
+      const list = callsByStep.get(call.step_id) ?? [];
+      list.push(call);
+      callsByStep.set(call.step_id, list);
+    }
+
+    const steps: StepWithCalls[] = stepsRes.results.map((step) => ({
+      ...step,
+      tool_calls: callsByStep.get(step.id) ?? [],
+    }));
+
+    return { trace, steps };
   }
 
   // ---------------------------------------------------------------------------

@@ -342,6 +342,21 @@ app.post(
   }
 );
 
+app.post(
+  '/api/v1/entities/:id/subgraph',
+  zValidator('json', TraverseRelationsSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const subgraph = await ltm(c).traverseSubgraph(c.req.param('id'), {
+      maxDepth: body.max_depth,
+      relationTypes: body.relation_types,
+      direction: body.direction,
+      limit: body.limit,
+    });
+    return c.json(subgraph);
+  }
+);
+
 // ===========================================================================
 // Long-Term Memory — Preferences
 // ===========================================================================
@@ -478,6 +493,14 @@ app.post(
     return c.json(results);
   }
 );
+
+app.get('/api/v1/traces/:id', async (c) => {
+  const detail = await pm(c).getTraceDetail(c.req.param('id'));
+  if (!detail) {
+    return c.json({ error: 'Trace not found' }, 404);
+  }
+  return c.json(detail);
+});
 
 // ===========================================================================
 // Procedural Memory — Steps & Tool Calls
