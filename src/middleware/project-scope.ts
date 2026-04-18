@@ -4,7 +4,10 @@ import type { AppType } from '../types';
 const knownProjects = new Set<string>();
 
 export const projectScopeMiddleware = createMiddleware<AppType>(async (c, next) => {
-  const projectId = c.req.header('X-Project-Id') || 'default';
+  // Header wins; query param is a fallback for contexts where headers
+  // aren't available (e.g. browser WebSocket opens can't set headers).
+  const projectId =
+    c.req.header('X-Project-Id') || c.req.query('project_id') || 'default';
 
   if (!knownProjects.has(projectId)) {
     await c.env.DB.prepare(

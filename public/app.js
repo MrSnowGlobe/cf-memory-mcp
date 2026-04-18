@@ -1517,7 +1517,15 @@ const liveState = {
 
 function wsUrl(path) {
   const base = settings.baseUrl || window.location.origin;
-  return base.replace(/^http/, 'ws') + path;
+  // Native WebSocket API can't send custom headers, so we pass scope via
+  // query params. The scope middleware reads project_id/user_id as a
+  // header fallback.
+  const params = new URLSearchParams({
+    project_id: settings.projectId,
+    user_id: settings.userId,
+  });
+  const sep = path.includes('?') ? '&' : '?';
+  return base.replace(/^http/, 'ws') + path + sep + params.toString();
 }
 
 function updateLiveIndicator(state) {
