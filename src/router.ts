@@ -15,6 +15,7 @@ import {
   AddEntitySchema,
   UpdateEntitySchema,
   AddRelationSchema,
+  TraverseRelationsSchema,
   AddPreferenceSchema,
   AddFactSchema,
   InvalidateFactSchema,
@@ -300,7 +301,8 @@ app.post(
       c.req.param('id'),
       body.target_entity_id,
       body.relation_type,
-      body.metadata
+      body.metadata,
+      body.relation_strength
     );
     return c.json(relation, 201);
   }
@@ -310,6 +312,21 @@ app.get('/api/v1/entities/:id/relations', async (c) => {
   const relations = await ltm(c).getRelations(c.req.param('id'));
   return c.json(relations);
 });
+
+app.post(
+  '/api/v1/entities/:id/traverse',
+  zValidator('json', TraverseRelationsSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const neighbors = await ltm(c).traverseRelations(c.req.param('id'), {
+      maxDepth: body.max_depth,
+      relationTypes: body.relation_types,
+      direction: body.direction,
+      limit: body.limit,
+    });
+    return c.json(neighbors);
+  }
+);
 
 // ===========================================================================
 // Long-Term Memory — Preferences

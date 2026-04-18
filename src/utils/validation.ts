@@ -85,9 +85,18 @@ export type UpdateEntityInput = z.infer<typeof UpdateEntitySchema>;
 export const AddRelationSchema = z.object({
   target_entity_id: z.string().min(1).max(MAX_SHORT_STRING),
   relation_type: z.string().min(1).max(MAX_SHORT_STRING),
+  relation_strength: z.number().min(0).max(1).optional(),
   metadata: metadataSchema,
 });
 export type AddRelationInput = z.infer<typeof AddRelationSchema>;
+
+export const TraverseRelationsSchema = z.object({
+  max_depth: z.number().int().min(1).max(4).optional(),
+  relation_types: z.array(z.string().min(1).max(MAX_SHORT_STRING)).max(20).optional(),
+  direction: z.enum(['out', 'in', 'both']).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+export type TraverseRelationsInput = z.infer<typeof TraverseRelationsSchema>;
 
 // ============================================================
 // Long-Term Memory — Preferences

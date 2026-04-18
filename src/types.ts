@@ -76,8 +76,13 @@ export interface RelationRow {
   source_entity_id: string;
   target_entity_id: string;
   relation_type: string;
+  relation_strength: number;
   metadata: string;
   created_at: string;
+}
+
+export interface NeighborRow extends EntityRow {
+  hop_distance: number;
 }
 
 export interface PreferenceRow {

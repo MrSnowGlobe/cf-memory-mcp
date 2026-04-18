@@ -3,6 +3,7 @@ import type {
   ContextInput,
   MessageRow,
   EntityRow,
+  NeighborRow,
   PreferenceRow,
   FactRow,
   TraceRow,
@@ -11,6 +12,8 @@ import type {
 import { ShortTermMemory } from './short-term';
 import { LongTermMemory } from './long-term';
 import { ProceduralMemory } from './procedural';
+import { traverseRelations } from '../services/graph';
+import { GRAPH } from '../config';
 
 /** Default limits for each memory section when not specified by caller. */
 const DEFAULT_LIMITS = {
@@ -137,6 +140,23 @@ export async function buildContext(
       return `- ${row.name} (${row.entity_type})${desc}`;
     });
     sections.push(`## Known Entities\n${lines.join('\n')}`);
+  }
+
+  // Related Entities (1-hop graph expansion of the top entities)
+  if (entities.length > 0 && include.includes('long_term')) {
+    const topEntities = entities
+      .slice(0, GRAPH.contextEntitiesToExpand)
+      .map(({ row }) => row);
+    const neighborGroups = await fetchNeighborGroups(env, projectId, userId, topEntities);
+    if (neighborGroups.length > 0) {
+      const groupLines = neighborGroups.map(({ root, neighbors }) => {
+        const items = neighbors
+          .map((n) => `  - ${n.name} (${n.entity_type}, hop ${n.hop_distance})`)
+          .join('\n');
+        return `- ${root.name}:\n${items}`;
+      });
+      sections.push(`## Related Entities\n${groupLines.join('\n')}`);
+    }
   }
 
   // Preferences
@@ -299,6 +319,32 @@ async function hydrateTraces(
     return res.results;
   });
   return joinWithScores(rows, results, (row) => row.id);
+}
+
+/**
+ * For each top entity, fetch its 1-hop neighbors. Runs in parallel and
+ * skips entities whose traversal returns nothing so the section only
+ * appears when there's something to show.
+ */
+async function fetchNeighborGroups(
+  env: Bindings,
+  projectId: string,
+  userId: string,
+  roots: EntityRow[]
+): Promise<Array<{ root: EntityRow; neighbors: NeighborRow[] }>> {
+  if (roots.length === 0) return [];
+  const groups = await Promise.all(
+    roots.map(async (root) => {
+      const neighbors = await safeQuery(() =>
+        traverseRelations(env, root.id, projectId, userId, {
+          maxDepth: 1,
+          limit: GRAPH.contextNeighborsPerEntity,
+        })
+      );
+      return { root, neighbors };
+    })
+  );
+  return groups.filter((g) => g.neighbors.length > 0);
 }
 
 /**

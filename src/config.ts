@@ -28,3 +28,12 @@ export const SSE = {
   pingIntervalMs: 30_000,
   maxDurationMs: 300_000,
 } as const;
+
+export const GRAPH = {
+  defaultMaxDepth: 2,
+  hardMaxDepth: 4,
+  defaultLimit: 50,
+  // Per-entity neighbor count when buildContext expands the top entities
+  contextNeighborsPerEntity: 3,
+  contextEntitiesToExpand: 3,
+} as const;
