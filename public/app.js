@@ -296,7 +296,7 @@ class GraphView {
     this.typeFilter = new Set(ENTITY_TYPES);
     this.searchHighlight = new Set();
     this.showFacts = false;
-    this.factsByNode = new Map();
+    this.chipsByNode = new Map();
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
@@ -374,8 +374,8 @@ class GraphView {
     this.alpha = Math.max(this.alpha, 0.15);
   }
 
-  setFactIndex(map) {
-    this.factsByNode = map ?? new Map();
+  setChips(map) {
+    this.chipsByNode = map ?? new Map();
   }
 
   _isVisible(n) {
@@ -537,24 +537,22 @@ class GraphView {
       ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
       ctx.fill();
 
-      // Fact chips — small pills of predicate text stacked below the node.
-      // Cap at 3 so noisy entities don't swallow the canvas; overflow becomes
-      // a "+N more" chip the same shape.
+      // Chip overlay — two-color pills below the node, one per fact
+      // (predicate: object) or preference (category: preference). Cap
+      // at 3 per node; overflow collapses to a "+N more" chip.
       let stackBottomY = n.y + r;
       if (this.showFacts && !dimmed) {
-        const facts = this.factsByNode.get(n.id);
-        if (facts && facts.length) {
+        const chips = this.chipsByNode.get(n.id);
+        if (chips && chips.length) {
           const MAX_CHIPS = 3;
-          const chipH = 12;
+          const chipH = 13;
           const gap = 3;
           let cy = stackBottomY + 10;
           ctx.font = '500 9px "IBM Plex Mono", monospace';
-          ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          const drawPill = (text, tone) => {
-            const w = Math.min(ctx.measureText(text).width + 10, 140);
+
+          const drawPill = (w, by, tone) => {
             const bx = n.x - w / 2;
-            const by = cy - chipH / 2;
             const rr = 5;
             ctx.beginPath();
             ctx.moveTo(bx + rr, by);
@@ -567,21 +565,47 @@ class GraphView {
             ctx.lineTo(bx, by + rr);
             ctx.arcTo(bx, by, bx + rr, by, rr);
             ctx.closePath();
-            ctx.fillStyle = tone === 'more' ? 'rgba(80, 70, 55, 0.35)' : 'rgba(212, 165, 116, 0.14)';
-            ctx.strokeStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.3)' : 'rgba(212, 165, 116, 0.5)';
+            ctx.fillStyle = tone === 'more' ? 'rgba(80, 70, 55, 0.35)' : 'rgba(212, 165, 116, 0.12)';
+            ctx.strokeStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.3)' : 'rgba(212, 165, 116, 0.45)';
             ctx.lineWidth = 0.6;
             ctx.fill();
             ctx.stroke();
-            ctx.fillStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.75)' : '#E8C08A';
-            ctx.fillText(text, n.x, cy);
+            return bx;
           };
-          const shown = facts.slice(0, MAX_CHIPS);
-          for (const f of shown) {
-            drawPill((f.predicate || '').slice(0, 20), 'chip');
+
+          const truncate = (s, max) =>
+            !s ? '' : s.length <= max ? s : s.slice(0, Math.max(1, max - 1)) + '…';
+
+          const shown = chips.slice(0, MAX_CHIPS);
+          for (const chip of shown) {
+            const keyStr = truncate(chip.key || '', 14);
+            const valBudget = Math.max(4, 30 - keyStr.length - 3);
+            const valStr = truncate(chip.value || '', valBudget);
+            const sep = ' · ';
+            const keyW = ctx.measureText(keyStr).width;
+            const sepW = ctx.measureText(sep).width;
+            const valW = ctx.measureText(valStr).width;
+            const totalW = Math.min(keyW + sepW + valW + 12, 220);
+            const bx = drawPill(totalW, cy - chipH / 2, 'chip');
+            ctx.textAlign = 'left';
+            let tx = bx + 6;
+            ctx.fillStyle = chip.kind === 'pref' ? '#E8D8B0' : '#E8C08A';
+            ctx.fillText(keyStr, tx, cy);
+            tx += keyW;
+            ctx.fillStyle = 'rgba(212, 165, 116, 0.5)';
+            ctx.fillText(sep, tx, cy);
+            tx += sepW;
+            ctx.fillStyle = 'rgba(232, 224, 200, 0.82)';
+            ctx.fillText(valStr, tx, cy);
             cy += chipH + gap;
           }
-          if (facts.length > MAX_CHIPS) {
-            drawPill(`+${facts.length - MAX_CHIPS} more`, 'more');
+          if (chips.length > MAX_CHIPS) {
+            const text = `+${chips.length - MAX_CHIPS} more`;
+            const w = ctx.measureText(text).width + 10;
+            const bx = drawPill(w, cy - chipH / 2, 'more');
+            ctx.textAlign = 'center';
+            ctx.fillStyle = 'rgba(212, 165, 116, 0.75)';
+            ctx.fillText(text, n.x, cy);
             cy += chipH + gap;
           }
           stackBottomY = cy - gap - chipH / 2;
@@ -2458,7 +2482,23 @@ async function refresh(opts = {}) {
     // alongside the real entities. Keep it out of the type-filter counts.
     const selfNode = buildSelfNode();
     graph.setData([selfNode, ...snapshot.entities], snapshot.relations);
-    graph.setFactIndex(state.factIndex.byEntity);
+
+    // Build chip overlay: one entry per fact (attached to its subject
+    // entity) and one per preference (attached to the synthetic You).
+    const chipsByNode = new Map();
+    for (const [entityId, entityFacts] of state.factIndex.byEntity) {
+      chipsByNode.set(
+        entityId,
+        entityFacts.map((f) => ({ key: f.predicate, value: f.object, kind: 'fact' }))
+      );
+    }
+    if (preferences?.length) {
+      chipsByNode.set(
+        SELF_NODE_ID,
+        preferences.map((p) => ({ key: p.category, value: p.preference, kind: 'pref' }))
+      );
+    }
+    graph.setChips(chipsByNode);
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
     renderMessages(snapshot.recent_messages);
