@@ -949,6 +949,47 @@ input[type="range"]::-moz-range-thumb {
   font-variant-numeric: tabular-nums;
 }
 
+/* Record cards (preferences, facts) rendered inline inside the detail panel. */
+.detail-section__list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--u); }
+.detail-section__list .record-card {
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
+  gap: var(--u);
+  font-size: 13px;
+}
+.detail-section__list .record-card__body,
+.detail-section__list .record-card__triple { font-size: 14px; line-height: 1.4; }
+.detail-section__empty {
+  font-family: var(--serif);
+  font-size: 12px;
+  color: var(--dim);
+  padding: var(--u) 0;
+  margin: 0;
+}
+
+/* Unanchored-facts drawer (facts whose subject matches no entity).
+   Lives inside the detail placeholder when nothing is selected. */
+.drawer-unanchored { margin-top: calc(var(--u) * 3); border-top: 1px dashed var(--rule); padding-top: calc(var(--u) * 2); }
+.drawer-unanchored__toggle {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.drawer-unanchored__toggle:hover { color: var(--long); }
+.drawer-unanchored__caret { display: inline-block; transition: transform 160ms ease; }
+.drawer-unanchored[data-open="true"] .drawer-unanchored__caret { transform: rotate(90deg); }
+.drawer-unanchored__list { list-style: none; padding: 0; margin: calc(var(--u) * 2) 0 0; display: grid; gap: var(--u); }
+.drawer-unanchored[data-open="false"] .drawer-unanchored__list { display: none; }
+
 .neighbour-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 .neighbour {
   display: grid;
@@ -1424,96 +1465,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ============================================================
-   Records view — full, readable preferences + facts
+   Record cards (preferences + facts) — shared by the entity
+   detail panel and the unanchored-facts drawer.
    ============================================================ */
-
-.records {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: calc(var(--u) * 3);
-  min-height: 320px;
-  max-height: 560px;
-}
-
-.records__column { display: flex; flex-direction: column; gap: calc(var(--u) * 1.5); min-height: 0; }
-
-.records__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--rule);
-  padding-bottom: var(--u);
-}
-.records__head h2 {
-  font-family: var(--serif);
-  font-size: 22px;
-  color: var(--ink);
-}
-.records__count {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.06em;
-}
-.records__hint {
-  margin: 0;
-  font-family: var(--serif);
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.records__search input {
-  width: 100%;
-  background: var(--inset);
-  border: 1px solid var(--rule);
-  padding: 8px 12px;
-  border-radius: var(--r);
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink);
-  outline: none;
-  letter-spacing: 0.02em;
-  transition: border-color 140ms ease;
-}
-.records__search input::placeholder {
-  font-family: var(--serif);
-  color: var(--dim);
-}
-.records__search input:focus {
-  border-color: var(--long);
-  background: var(--bg);
-}
-.records__search input:not(:placeholder-shown) {
-  border-color: var(--long);
-  color: var(--hot);
-}
-
-.records__count[data-filtered="true"]::before {
-  content: attr(data-shown);
-  color: var(--hot);
-}
-.records__count[data-filtered="true"]::after {
-  content: ' / ' attr(data-total);
-  color: var(--muted);
-}
-.records__count[data-filtered="true"] { font-size: 0; }
-.records__count[data-filtered="true"]::before,
-.records__count[data-filtered="true"]::after {
-  font-size: 11px;
-}
-
-.records__list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: calc(var(--u) * 2);
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.records__list::-webkit-scrollbar { width: 8px; }
-.records__list::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 4px; }
 
 .record-card {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
@@ -1682,7 +1636,6 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (max-width: 1100px) {
-  .records { grid-template-columns: 1fr; }
   .record-edit__field-row { grid-template-columns: 1fr; }
 }
 

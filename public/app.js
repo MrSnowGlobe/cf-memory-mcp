@@ -30,7 +30,60 @@ const TYPE_COLORS = {
   EVENT: '#A87C9F',
   ORGANIZATION: '#D4B574',
   CUSTOM: '#7DA8A4',
+  SELF: '#E8D8B0',
 };
+
+// The "You" graph node is a client-side synthetic — it does not exist
+// in D1, but anchors the preferences for the current (project, user)
+// scope so they live on the graph alongside everything else.
+const SELF_NODE_ID = '__you__';
+
+function buildSelfNode() {
+  return {
+    id: SELF_NODE_ID,
+    name: 'You',
+    entity_type: 'SELF',
+    subtype: null,
+    description: `Preferences for ${settings.userId} in ${settings.projectId}. Click to view.`,
+    project_id: settings.projectId,
+    user_id: settings.userId,
+    updated_at: new Date().toISOString(),
+    __synthetic: true,
+  };
+}
+
+function normalizeName(s) {
+  return (s ?? '').trim().toLowerCase();
+}
+
+/**
+ * Group facts by the entity their `subject` refers to. Subjects are
+ * free text in the schema, so we match them to entity names with an
+ * exact case-normalized comparison — a fuzzy pass could be added later
+ * if the unanchored rate turns out high.
+ *
+ * Returns { byEntity, unanchored } where byEntity is a Map keyed by
+ * entity.id and unanchored holds facts we couldn't place.
+ */
+function buildFactIndex(facts, entities) {
+  const byName = new Map();
+  for (const e of entities) {
+    if (e.__synthetic) continue;
+    byName.set(normalizeName(e.name), e.id);
+  }
+  const byEntity = new Map();
+  const unanchored = [];
+  for (const f of facts ?? []) {
+    const hit = byName.get(normalizeName(f.subject));
+    if (hit) {
+      if (!byEntity.has(hit)) byEntity.set(hit, []);
+      byEntity.get(hit).push(f);
+    } else {
+      unanchored.push(f);
+    }
+  }
+  return { byEntity, unanchored };
+}
 
 function loadSettings() {
   try {
@@ -315,6 +368,7 @@ class GraphView {
   }
 
   _isVisible(n) {
+    if (n.__synthetic) return true;
     return this.typeFilter.has(n.entity_type);
   }
 
@@ -786,6 +840,14 @@ async function selectEntity(node) {
   graph.setSelected(node.id);
   const detail = $('#detail');
   detail.innerHTML = '';
+
+  // The synthetic "You" node is not in D1 — skip the relations/traverse
+  // fetch and render the user's preferences instead.
+  if (node.__synthetic && node.entity_type === 'SELF') {
+    renderSelfDetail(detail, node);
+    return;
+  }
+
   const card = el('div', { class: 'detail-card' });
 
   const color = TYPE_COLORS[node.entity_type] || '#8B8170';
@@ -846,6 +908,10 @@ async function selectEntity(node) {
   const neighList = el('ul', { class: 'neighbour-list' });
   neighSection.append(neighList);
   card.append(neighSection);
+
+  // Facts whose subject name matches this entity, grouped client-side.
+  const matchedFacts = state.factIndex?.byEntity.get(node.id) ?? [];
+  card.append(renderEntityFactsSection(matchedFacts));
 
   detail.append(card);
 
@@ -1013,77 +1079,10 @@ function bindTraversal() {
 }
 
 // ----- Long-term records (preferences + facts) ------------------------------
+//
+// Facts attach to their subject entity; preferences attach to the
+// synthetic "You" node. The old standalone records section is gone.
 
-function renderRecordsView(preferences, facts) {
-  state.preferences = preferences;
-  state.facts = facts;
-  applyRecordsFilter('prefs');
-  applyRecordsFilter('facts');
-}
-
-/**
- * Re-render either the preferences or facts list, applying the current
- * search filter. Called on initial render AND on every keystroke in the
- * search input — cheap because we only ever paint visible cards.
- */
-function applyRecordsFilter(which) {
-  const isPref = which === 'prefs';
-  const all = isPref ? state.preferences ?? [] : state.facts ?? [];
-  const list = $(isPref ? '#records-prefs' : '#records-facts');
-  const countNode = $(isPref ? '#records-prefs-count' : '#records-facts-count');
-  const input = $(isPref ? '#search-prefs' : '#search-facts');
-  const query = input?.value ?? '';
-
-  const matched = all.filter((row) => matchesQuery(query, isPref ? prefSearchText(row) : factSearchText(row)));
-
-  list.innerHTML = '';
-
-  if (query) {
-    countNode.dataset.filtered = 'true';
-    countNode.dataset.shown = String(matched.length);
-    countNode.dataset.total = String(all.length);
-    countNode.textContent = '';
-  } else {
-    delete countNode.dataset.filtered;
-    countNode.textContent = String(all.length);
-  }
-
-  if (!all.length) {
-    list.append(emptyScopeCard(isPref ? 'preferences' : 'facts'));
-    return;
-  }
-
-  if (!matched.length) {
-    list.append(
-      el('li', { class: 'records__empty' }, [
-        el('p', { style: 'margin: 0;' }, [
-          'Nothing matches ',
-          el('code', { style: 'color: var(--hot); font-style: normal;' }, query),
-          '.',
-        ]),
-      ])
-    );
-    return;
-  }
-
-  for (const row of matched) {
-    list.append(isPref ? renderPreferenceCard(row) : renderFactCard(row));
-  }
-}
-
-function prefSearchText(p) {
-  return [p.category, p.preference, p.context ?? ''].join(' ').toLowerCase();
-}
-
-function factSearchText(f) {
-  return [f.subject, f.predicate, f.object, f.source ?? ''].join(' ').toLowerCase();
-}
-
-/**
- * Multi-token "fuzzy" filter: every whitespace-split token of the query
- * must appear as a case-insensitive substring somewhere in the haystack.
- * Empty query matches everything.
- */
 function matchesQuery(query, haystack) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -1091,15 +1090,100 @@ function matchesQuery(query, haystack) {
   return tokens.every((t) => haystack.includes(t));
 }
 
-function bindRecordsSearch() {
-  const debounce = (fn, ms) => {
-    let t;
-    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-  };
-  const onPrefs = debounce(() => applyRecordsFilter('prefs'), 100);
-  const onFacts = debounce(() => applyRecordsFilter('facts'), 100);
-  $('#search-prefs')?.addEventListener('input', onPrefs);
-  $('#search-facts')?.addEventListener('input', onFacts);
+/**
+ * Render the detail panel for the synthetic "You" node — lists the
+ * current scope's preferences in the same visual slot that a real
+ * entity's relations/facts would occupy.
+ */
+function renderSelfDetail(detail, node) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.SELF}` }, 'SELF'),
+    ])
+  );
+  card.append(el('h2', { class: 'detail-card__name' }, 'You'));
+
+  const meta = el('dl', { class: 'detail-card__meta' });
+  meta.append(el('dt', {}, 'project'));
+  meta.append(el('dd', {}, node.project_id));
+  meta.append(el('dt', {}, 'user'));
+  meta.append(el('dd', {}, node.user_id));
+  card.append(meta);
+  card.append(el('p', { class: 'detail-card__desc' }, node.description));
+
+  const prefs = state.preferences ?? [];
+  const section = el('section', { class: 'detail-section' });
+  section.append(el('h4', { class: 'detail-section__title' }, [
+    'Preferences',
+    el('span', { class: 'count' }, String(prefs.length)),
+  ]));
+  if (!prefs.length) {
+    section.append(el('p', { class: 'detail-section__empty' }, 'No preferences in this scope yet.'));
+  } else {
+    const list = el('ul', { class: 'detail-section__list' });
+    for (const p of prefs) list.append(renderPreferenceCard(p));
+    section.append(list);
+  }
+  card.append(section);
+  detail.append(card);
+}
+
+/**
+ * Build the "Facts" detail section for a real entity. Shows a short
+ * empty line rather than being omitted so the user sees "no facts
+ * yet" on entities they care about.
+ */
+function renderEntityFactsSection(facts) {
+  const section = el('section', { class: 'detail-section' });
+  section.append(el('h4', { class: 'detail-section__title' }, [
+    'Facts',
+    el('span', { class: 'count' }, String(facts.length)),
+  ]));
+  if (!facts.length) {
+    section.append(el('p', { class: 'detail-section__empty' }, 'No facts mention this entity by name.'));
+    return section;
+  }
+  const list = el('ul', { class: 'detail-section__list' });
+  for (const f of facts) list.append(renderFactCard(f));
+  section.append(list);
+  return section;
+}
+
+/**
+ * Populate the detail panel's idle state (nothing selected). Keeps the
+ * original "pick a node" hint and appends a collapsible drawer for any
+ * facts whose subject didn't resolve to an entity name.
+ */
+function renderDetailPlaceholder() {
+  const detail = $('#detail');
+  detail.innerHTML = '';
+  detail.append(
+    el('div', { class: 'detail__placeholder' }, [
+      el('p', { class: 'detail__placeholder-line' }, 'No selection.'),
+      el('p', { class: 'detail__placeholder-sub' }, 'Pick a node from the chart to inspect its neighbourhood. Click You to see your preferences.'),
+    ])
+  );
+
+  const unanchored = state.factIndex?.unanchored ?? [];
+  if (!unanchored.length) return;
+
+  const drawer = el('div', { class: 'drawer-unanchored', dataset: { open: 'false' } });
+  const toggle = el('button', {
+    type: 'button',
+    class: 'drawer-unanchored__toggle',
+    onClick: () => {
+      const open = drawer.dataset.open === 'true';
+      drawer.dataset.open = open ? 'false' : 'true';
+    },
+  }, [
+    el('span', { class: 'drawer-unanchored__caret' }, '▸'),
+    `${unanchored.length} unanchored fact${unanchored.length === 1 ? '' : 's'}`,
+  ]);
+  const list = el('ul', { class: 'drawer-unanchored__list' });
+  for (const f of unanchored) list.append(renderFactCard(f));
+  drawer.append(toggle, list);
+  detail.append(drawer);
 }
 
 function emptyStreamCard(thing) {
@@ -2254,7 +2338,7 @@ async function doPromote(type, id, reason, target, form) {
 function moveSelection(delta) {
   // Alphabetical order among currently-visible entities so j/k is predictable.
   const visible = graph.nodes
-    .filter((n) => graph.typeFilter.has(n.entity_type))
+    .filter((n) => n.__synthetic || graph.typeFilter.has(n.entity_type))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name));
   if (!visible.length) return;
@@ -2292,13 +2376,20 @@ async function refresh(opts = {}) {
     renderStats(snapshot.stats);
     renderTypeFilters();
 
-    graph.setData(snapshot.entities, snapshot.relations);
+    state.preferences = preferences;
+    state.facts = facts;
+    state.factIndex = buildFactIndex(facts, snapshot.entities);
+
+    // Inject the "You" synthetic node so preferences live on the graph
+    // alongside the real entities. Keep it out of the type-filter counts.
+    const selfNode = buildSelfNode();
+    graph.setData([selfNode, ...snapshot.entities], snapshot.relations);
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
     renderMessages(snapshot.recent_messages);
     renderTraces(snapshot.recent_traces);
-    renderRecordsView(preferences, facts);
     renderToolStats(toolStats);
+    renderDetailPlaceholder();
 
     setStatus('ok', 'connected');
   } catch (err) {
@@ -2317,7 +2408,6 @@ async function init() {
   bindSearch();
   bindTraversal();
   bindViewSwitch();
-  bindRecordsSearch();
   bindLogin();
   bindGlobalSearch();
   bindTraceInspector();
