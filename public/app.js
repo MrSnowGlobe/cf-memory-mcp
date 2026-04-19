@@ -1396,6 +1396,42 @@ function renderStats(stats) {
   }
 }
 
+// ----- Stat card collapse ---------------------------------------------------
+
+const STATS_COLLAPSE_KEY = 'observatory.stats.collapse.v1';
+
+function loadStatsCollapse() {
+  try {
+    const raw = localStorage.getItem(STATS_COLLAPSE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStatsCollapse(s) {
+  try { localStorage.setItem(STATS_COLLAPSE_KEY, JSON.stringify(s)); } catch {}
+}
+
+function bindStatsCollapse() {
+  const saved = loadStatsCollapse();
+  for (const card of $$('.stat')) {
+    const tier = card.dataset.tier;
+    // Default: expanded. Only collapse if the saved state explicitly says so.
+    const expanded = saved[tier] !== false;
+    card.setAttribute('aria-expanded', String(expanded));
+
+    const head = card.querySelector('.stat__head');
+    head?.addEventListener('click', () => {
+      const next = card.getAttribute('aria-expanded') !== 'true';
+      card.setAttribute('aria-expanded', String(next));
+      const current = loadStatsCollapse();
+      current[tier] = next;
+      saveStatsCollapse(current);
+    });
+  }
+}
+
 // ----- Streams (messages & traces) ------------------------------------------
 
 function freshClass(id) {
@@ -3279,6 +3315,7 @@ async function init() {
   timeline.onCursorChange = applyAsOfCursor;
   timeline.onPickItem = onTimelinePick;
   bindTimelineReset();
+  bindStatsCollapse();
   bindSettings();
   bindSearch();
   bindTraversal();

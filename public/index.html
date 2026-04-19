@@ -199,76 +199,60 @@
 
     <!-- Stats strip -->
     <section class="stats" aria-label="Memory tier counts">
-      <article class="stat stat--long" data-tier="long">
-        <header class="stat__head">
+      <article class="stat stat--long" data-tier="long" aria-expanded="true">
+        <button type="button" class="stat__head">
           <span class="stat__tier">long&#8209;term</span>
-          <span class="stat__rule" aria-hidden="true"></span>
-        </header>
-        <div class="stat__row">
-          <span class="stat__label">entities</span>
-          <span class="stat__value" data-stat="entities">0</span>
-        </div>
-        <div class="stat__row">
-          <span class="stat__label">relations</span>
-          <span class="stat__value" data-stat="relations">0</span>
-        </div>
-        <div class="stat__row">
-          <span class="stat__label">facts</span>
-          <span class="stat__value" data-stat="facts">0</span>
-        </div>
-        <div class="stat__row">
-          <span class="stat__label">preferences</span>
-          <span class="stat__value" data-stat="preferences">0</span>
+          <span class="stat__caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="stat__body">
+          <div class="stat__row">
+            <span class="stat__label">entities</span>
+            <span class="stat__value" data-stat="entities">0</span>
+          </div>
+          <div class="stat__row">
+            <span class="stat__label">relations</span>
+            <span class="stat__value" data-stat="relations">0</span>
+          </div>
+          <div class="stat__row">
+            <span class="stat__label">facts</span>
+            <span class="stat__value" data-stat="facts">0</span>
+          </div>
+          <div class="stat__row">
+            <span class="stat__label">preferences</span>
+            <span class="stat__value" data-stat="preferences">0</span>
+          </div>
         </div>
       </article>
 
-      <article class="stat stat--short" data-tier="short">
-        <header class="stat__head">
+      <article class="stat stat--short" data-tier="short" aria-expanded="true">
+        <button type="button" class="stat__head">
           <span class="stat__tier">short&#8209;term</span>
-          <span class="stat__rule" aria-hidden="true"></span>
-        </header>
-        <div class="stat__row">
-          <span class="stat__label">sessions</span>
-          <span class="stat__value" data-stat="sessions">0</span>
-        </div>
-        <div class="stat__row">
-          <span class="stat__label">messages</span>
-          <span class="stat__value" data-stat="messages">0</span>
+          <span class="stat__caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="stat__body">
+          <div class="stat__row">
+            <span class="stat__label">sessions</span>
+            <span class="stat__value" data-stat="sessions">0</span>
+          </div>
+          <div class="stat__row">
+            <span class="stat__label">messages</span>
+            <span class="stat__value" data-stat="messages">0</span>
+          </div>
         </div>
       </article>
 
-      <article class="stat stat--proc" data-tier="proc">
-        <header class="stat__head">
+      <article class="stat stat--proc" data-tier="proc" aria-expanded="true">
+        <button type="button" class="stat__head">
           <span class="stat__tier">procedural</span>
-          <span class="stat__rule" aria-hidden="true"></span>
-        </header>
-        <div class="stat__row">
-          <span class="stat__label">traces</span>
-          <span class="stat__value" data-stat="traces">0</span>
+          <span class="stat__caret" aria-hidden="true">▾</span>
+        </button>
+        <div class="stat__body">
+          <div class="stat__row">
+            <span class="stat__label">traces</span>
+            <span class="stat__value" data-stat="traces">0</span>
+          </div>
         </div>
       </article>
-    </section>
-
-    <!-- ============================================================ -->
-    <!-- Timeline — per-tier dots on a shared time axis with scrubber  -->
-    <!-- ============================================================ -->
-    <section class="timeline" aria-label="Memory timeline">
-      <header class="timeline__head">
-        <h2>Timeline</h2>
-        <div class="timeline__legend" aria-hidden="true">
-          <span class="timeline__legend-item" data-tier="long"><span class="timeline__swatch"></span>long-term</span>
-          <span class="timeline__legend-item" data-tier="short"><span class="timeline__swatch"></span>short-term</span>
-          <span class="timeline__legend-item" data-tier="proc"><span class="timeline__swatch"></span>procedural</span>
-        </div>
-        <div class="timeline__cursor-readout">
-          <span class="timeline__cursor-label" id="timeline-cursor-label">now</span>
-          <button type="button" id="timeline-reset" class="timeline__reset" hidden>reset</button>
-        </div>
-      </header>
-      <div class="timeline__frame">
-        <canvas id="timeline" width="1200" height="90"></canvas>
-        <div class="timeline__tooltip" id="timeline-tooltip" hidden></div>
-      </div>
     </section>
 
     <!-- ============================================================ -->
@@ -358,6 +342,28 @@
         </div>
       </aside>
     </main>
+
+    <!-- ============================================================ -->
+    <!-- Timeline — per-tier dots on a shared time axis with scrubber  -->
+    <!-- ============================================================ -->
+    <section class="timeline" aria-label="Memory timeline">
+      <header class="timeline__head">
+        <h2>Timeline</h2>
+        <div class="timeline__legend" aria-hidden="true">
+          <span class="timeline__legend-item" data-tier="long"><span class="timeline__swatch"></span>long-term</span>
+          <span class="timeline__legend-item" data-tier="short"><span class="timeline__swatch"></span>short-term</span>
+          <span class="timeline__legend-item" data-tier="proc"><span class="timeline__swatch"></span>procedural</span>
+        </div>
+        <div class="timeline__cursor-readout">
+          <span class="timeline__cursor-label" id="timeline-cursor-label">now</span>
+          <button type="button" id="timeline-reset" class="timeline__reset" hidden>reset</button>
+        </div>
+      </header>
+      <div class="timeline__frame">
+        <canvas id="timeline" width="1200" height="90"></canvas>
+        <div class="timeline__tooltip" id="timeline-tooltip" hidden></div>
+      </div>
+    </section>
 
     <!-- ============================================================ -->
     <!-- Bottom strips: messages + traces                              -->
