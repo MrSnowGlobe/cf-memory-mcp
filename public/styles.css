@@ -987,30 +987,6 @@ input[type="range"]::-moz-range-thumb {
   margin: 0;
 }
 
-/* Unanchored-facts drawer (facts whose subject matches no entity).
-   Lives inside the detail placeholder when nothing is selected. */
-.drawer-unanchored { margin-top: calc(var(--u) * 3); border-top: 1px dashed var(--rule); padding-top: calc(var(--u) * 2); }
-.drawer-unanchored__toggle {
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-}
-.drawer-unanchored__toggle:hover { color: var(--long); }
-.drawer-unanchored__caret { display: inline-block; transition: transform 160ms ease; }
-.drawer-unanchored[data-open="true"] .drawer-unanchored__caret { transform: rotate(90deg); }
-.drawer-unanchored__list { list-style: none; padding: 0; margin: calc(var(--u) * 2) 0 0; display: grid; gap: var(--u); }
-.drawer-unanchored[data-open="false"] .drawer-unanchored__list { display: none; }
-
 .neighbour-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 .neighbour {
   display: grid;

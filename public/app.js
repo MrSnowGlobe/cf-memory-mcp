@@ -31,6 +31,8 @@ const TYPE_COLORS = {
   ORGANIZATION: '#D4B574',
   CUSTOM: '#7DA8A4',
   SELF: '#E8D8B0',
+  FACT: '#D4A574',
+  PREF: '#E8D8B0',
 };
 
 // The "You" graph node is a client-side synthetic — it does not exist
@@ -54,6 +56,97 @@ function buildSelfNode() {
 
 function normalizeName(s) {
   return (s ?? '').trim().toLowerCase();
+}
+
+// Synthetic diamond nodes representing facts and preferences on the
+// graph. Anchored facts get a thin edge to their subject entity;
+// unanchored facts float free. Preferences orbit the "You" node.
+function buildFactNode(fact) {
+  return {
+    id: `__fact__${fact.id}`,
+    name: fact.object ?? '',
+    entity_type: 'FACT',
+    subtype: null,
+    description: `${fact.subject} · ${fact.predicate} · ${fact.object}`,
+    project_id: fact.project_id,
+    user_id: fact.user_id,
+    updated_at: fact.created_at,
+    __synthetic: true,
+    __factNode: true,
+    __fact: fact,
+  };
+}
+
+function buildFactEdge(fact, subjectEntityId) {
+  return {
+    id: `__fact_edge__${fact.id}`,
+    source_entity_id: subjectEntityId,
+    target_entity_id: `__fact__${fact.id}`,
+    relation_type: fact.predicate,
+    relation_strength: 0.3,
+    __factEdge: true,
+  };
+}
+
+function buildPrefNode(pref) {
+  return {
+    id: `__pref__${pref.id}`,
+    name: pref.preference ?? '',
+    entity_type: 'PREF',
+    subtype: pref.category,
+    description: pref.preference + (pref.context ? `\n\n${pref.context}` : ''),
+    project_id: pref.project_id,
+    user_id: pref.user_id,
+    updated_at: pref.updated_at,
+    __synthetic: true,
+    __prefNode: true,
+    __pref: pref,
+  };
+}
+
+function buildPrefEdge(pref) {
+  return {
+    id: `__pref_edge__${pref.id}`,
+    source_entity_id: SELF_NODE_ID,
+    target_entity_id: `__pref__${pref.id}`,
+    relation_type: pref.category,
+    relation_strength: 0.3,
+    __prefEdge: true,
+  };
+}
+
+/**
+ * Recompute the full graph node + edge lists from the current state
+ * and push them to the GraphView. Called from refresh() after a load
+ * and from the overlay toggle — rebuilding is cheap compared to the
+ * perception cost of the sim re-settling, and keeps this as the one
+ * source of truth for what's on the canvas.
+ */
+function rebuildGraphFromState() {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+
+  const entities = [buildSelfNode(), ...snapshot.entities];
+  const relations = [...snapshot.relations];
+
+  if (state.showFacts) {
+    for (const [entityId, entityFacts] of state.factIndex?.byEntity ?? []) {
+      for (const f of entityFacts) {
+        entities.push(buildFactNode(f));
+        relations.push(buildFactEdge(f, entityId));
+      }
+    }
+    for (const f of state.factIndex?.unanchored ?? []) {
+      entities.push(buildFactNode(f));
+    }
+    for (const p of state.preferences ?? []) {
+      entities.push(buildPrefNode(p));
+      relations.push(buildPrefEdge(p));
+    }
+  }
+
+  graph.setData(entities, relations);
+  graph.alpha = 1;
 }
 
 /**
@@ -296,7 +389,6 @@ class GraphView {
     this.typeFilter = new Set(ENTITY_TYPES);
     this.searchHighlight = new Set();
     this.showFacts = false;
-    this.chipsByNode = new Map();
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
@@ -374,10 +466,6 @@ class GraphView {
     this.alpha = Math.max(this.alpha, 0.15);
   }
 
-  setChips(map) {
-    this.chipsByNode = map ?? new Map();
-  }
-
   _isVisible(n) {
     if (n.__synthetic) return true;
     return this.typeFilter.has(n.entity_type);
@@ -453,6 +541,7 @@ class GraphView {
   }
 
   _radius(n) {
+    if (n.__factNode || n.__prefNode) return 4;
     return 5 + Math.min(12, Math.sqrt(n.degree) * 2.5);
   }
 
@@ -509,6 +598,7 @@ class GraphView {
       const isHighlighted = this.searchHighlight.has(n.id);
       const dimmed = focusId && focusId !== n.id && focusedNeighbours && !focusedNeighbours.has(n.id);
       const color = TYPE_COLORS[n.entity_type] || '#8B8170';
+      const isDiamond = !!(n.__factNode || n.__prefNode);
 
       // Halo for selected / hovered / highlighted
       if (isSelected || isHover || isHighlighted) {
@@ -518,108 +608,56 @@ class GraphView {
         ctx.fill();
       }
 
-      // Outer ring (subtle)
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
-      ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      if (isDiamond) {
+        // Diamond (rotated square) for fact and preference nodes.
+        const rr = r + 1.5;
+        ctx.beginPath();
+        ctx.moveTo(n.x, n.y - rr);
+        ctx.lineTo(n.x + rr, n.y);
+        ctx.lineTo(n.x, n.y + rr);
+        ctx.lineTo(n.x - rr, n.y);
+        ctx.closePath();
+        ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
 
-      // Body
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = dimmed ? this._dim(color) : color;
-      ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(n.x, n.y - r);
+        ctx.lineTo(n.x + r, n.y);
+        ctx.lineTo(n.x, n.y + r);
+        ctx.lineTo(n.x - r, n.y);
+        ctx.closePath();
+        ctx.fillStyle = dimmed ? this._dim(color) : color;
+        ctx.fill();
+      } else {
+        // Outer ring (subtle)
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
 
-      // Inner highlight
-      ctx.beginPath();
-      ctx.arc(n.x - r * 0.3, n.y - r * 0.3, r * 0.4, 0, Math.PI * 2);
-      ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
-      ctx.fill();
+        // Body
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = dimmed ? this._dim(color) : color;
+        ctx.fill();
 
-      // Chip overlay — two-color pills below the node, one per fact
-      // (predicate: object) or preference (category: preference). Cap
-      // at 3 per node; overflow collapses to a "+N more" chip.
-      let stackBottomY = n.y + r;
-      if (this.showFacts && !dimmed) {
-        const chips = this.chipsByNode.get(n.id);
-        if (chips && chips.length) {
-          const MAX_CHIPS = 3;
-          const chipH = 13;
-          const gap = 3;
-          let cy = stackBottomY + 10;
-          ctx.font = '500 9px "IBM Plex Mono", monospace';
-          ctx.textBaseline = 'middle';
-
-          const drawPill = (w, by, tone) => {
-            const bx = n.x - w / 2;
-            const rr = 5;
-            ctx.beginPath();
-            ctx.moveTo(bx + rr, by);
-            ctx.lineTo(bx + w - rr, by);
-            ctx.arcTo(bx + w, by, bx + w, by + rr, rr);
-            ctx.lineTo(bx + w, by + chipH - rr);
-            ctx.arcTo(bx + w, by + chipH, bx + w - rr, by + chipH, rr);
-            ctx.lineTo(bx + rr, by + chipH);
-            ctx.arcTo(bx, by + chipH, bx, by + chipH - rr, rr);
-            ctx.lineTo(bx, by + rr);
-            ctx.arcTo(bx, by, bx + rr, by, rr);
-            ctx.closePath();
-            ctx.fillStyle = tone === 'more' ? 'rgba(80, 70, 55, 0.35)' : 'rgba(212, 165, 116, 0.12)';
-            ctx.strokeStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.3)' : 'rgba(212, 165, 116, 0.45)';
-            ctx.lineWidth = 0.6;
-            ctx.fill();
-            ctx.stroke();
-            return bx;
-          };
-
-          const truncate = (s, max) =>
-            !s ? '' : s.length <= max ? s : s.slice(0, Math.max(1, max - 1)) + '…';
-
-          const shown = chips.slice(0, MAX_CHIPS);
-          for (const chip of shown) {
-            const keyStr = truncate(chip.key || '', 14);
-            const valBudget = Math.max(4, 30 - keyStr.length - 3);
-            const valStr = truncate(chip.value || '', valBudget);
-            const sep = ' · ';
-            const keyW = ctx.measureText(keyStr).width;
-            const sepW = ctx.measureText(sep).width;
-            const valW = ctx.measureText(valStr).width;
-            const totalW = Math.min(keyW + sepW + valW + 12, 220);
-            const bx = drawPill(totalW, cy - chipH / 2, 'chip');
-            ctx.textAlign = 'left';
-            let tx = bx + 6;
-            ctx.fillStyle = chip.kind === 'pref' ? '#E8D8B0' : '#E8C08A';
-            ctx.fillText(keyStr, tx, cy);
-            tx += keyW;
-            ctx.fillStyle = 'rgba(212, 165, 116, 0.5)';
-            ctx.fillText(sep, tx, cy);
-            tx += sepW;
-            ctx.fillStyle = 'rgba(232, 224, 200, 0.82)';
-            ctx.fillText(valStr, tx, cy);
-            cy += chipH + gap;
-          }
-          if (chips.length > MAX_CHIPS) {
-            const text = `+${chips.length - MAX_CHIPS} more`;
-            const w = ctx.measureText(text).width + 10;
-            const bx = drawPill(w, cy - chipH / 2, 'more');
-            ctx.textAlign = 'center';
-            ctx.fillStyle = 'rgba(212, 165, 116, 0.75)';
-            ctx.fillText(text, n.x, cy);
-            cy += chipH + gap;
-          }
-          stackBottomY = cy - gap - chipH / 2;
-        }
+        // Inner highlight
+        ctx.beginPath();
+        ctx.arc(n.x - r * 0.3, n.y - r * 0.3, r * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
+        ctx.fill();
       }
 
-      // Label (only for hovered, selected, or large nodes) — positioned
-      // below any fact chips so nothing overlaps.
-      if (isHover || isSelected || (n.degree >= 3 && !focusId)) {
+      // Label (only for hovered, selected, or large nodes).
+      if (isHover || isSelected || (!isDiamond && n.degree >= 3 && !focusId)) {
         ctx.font = `italic 12px "Fraunces", "Cormorant Garamond", serif`;
-        const text = n.name;
+        const raw = n.name || '';
+        const text = raw.length > 48 ? raw.slice(0, 47) + '…' : raw;
         const tw = ctx.measureText(text).width;
         const tx = n.x;
-        const ty = stackBottomY + 14;
+        const ty = n.y + r + 14;
         ctx.fillStyle = 'rgba(11, 14, 15, 0.85)';
         ctx.fillRect(tx - tw / 2 - 5, ty - 10, tw + 10, 16);
         ctx.fillStyle = isSelected ? '#E8B96A' : '#F0E8D2';
@@ -770,6 +808,10 @@ const state = {
   typeCounts: {},
   enabledTypes: new Set(ENTITY_TYPES),
   traversal: { depth: 2, direction: 'both' },
+  preferences: [],
+  facts: [],
+  factIndex: { byEntity: new Map(), unanchored: [] },
+  showFacts: false,
 };
 
 let graph;
@@ -928,8 +970,16 @@ async function selectEntity(node) {
   const detail = $('#detail');
   detail.innerHTML = '';
 
-  // The synthetic "You" node is not in D1 — skip the relations/traverse
-  // fetch and render the user's preferences instead.
+  // Synthetic diamond nodes — not in D1, bypass the relations/traverse
+  // fetch and render their row directly.
+  if (node.__factNode) {
+    renderFactDetail(detail, node.__fact);
+    return;
+  }
+  if (node.__prefNode) {
+    renderPrefDetail(detail, node.__pref);
+    return;
+  }
   if (node.__synthetic && node.entity_type === 'SELF') {
     renderSelfDetail(detail, node);
     return;
@@ -1151,7 +1201,9 @@ function bindFactsToggle() {
     const next = btn.getAttribute('aria-pressed') !== 'true';
     btn.setAttribute('aria-pressed', String(next));
     btn.textContent = next ? 'on' : 'off';
+    state.showFacts = next;
     graph.setShowFacts(next);
+    rebuildGraphFromState();
   });
 }
 
@@ -1228,6 +1280,39 @@ function renderSelfDetail(detail, node) {
 }
 
 /**
+ * Detail panel for a fact diamond — wraps the existing fact card
+ * renderer in a detail-card shell so the layout matches entity panels.
+ */
+function renderFactDetail(detail, fact) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.FACT}` }, 'FACT'),
+    ])
+  );
+  const list = el('ul', { class: 'detail-section__list' });
+  list.append(renderFactCard(fact));
+  card.append(list);
+  detail.append(card);
+}
+
+/**
+ * Detail panel for a preference diamond.
+ */
+function renderPrefDetail(detail, pref) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.PREF}` }, 'PREF'),
+    ])
+  );
+  const list = el('ul', { class: 'detail-section__list' });
+  list.append(renderPreferenceCard(pref));
+  card.append(list);
+  detail.append(card);
+}
+
+/**
  * Build the "Facts" detail section for a real entity. Shows a short
  * empty line rather than being omitted so the user sees "no facts
  * yet" on entities they care about.
@@ -1250,8 +1335,9 @@ function renderEntityFactsSection(facts) {
 
 /**
  * Populate the detail panel's idle state (nothing selected). Keeps the
- * original "pick a node" hint and appends a collapsible drawer for any
- * facts whose subject didn't resolve to an entity name.
+ * original "pick a node" hint. Unanchored facts now render as free-
+ * floating diamonds on the graph when the chip overlay toggle is on,
+ * so the drawer that used to live here is gone.
  */
 function renderDetailPlaceholder() {
   const detail = $('#detail');
@@ -1259,29 +1345,9 @@ function renderDetailPlaceholder() {
   detail.append(
     el('div', { class: 'detail__placeholder' }, [
       el('p', { class: 'detail__placeholder-line' }, 'No selection.'),
-      el('p', { class: 'detail__placeholder-sub' }, 'Pick a node from the chart to inspect its neighbourhood. Click You to see your preferences.'),
+      el('p', { class: 'detail__placeholder-sub' }, 'Pick a node from the chart. Toggle "chips on graph" to surface facts and preferences as diamonds.'),
     ])
   );
-
-  const unanchored = state.factIndex?.unanchored ?? [];
-  if (!unanchored.length) return;
-
-  const drawer = el('div', { class: 'drawer-unanchored', dataset: { open: 'false' } });
-  const toggle = el('button', {
-    type: 'button',
-    class: 'drawer-unanchored__toggle',
-    onClick: () => {
-      const open = drawer.dataset.open === 'true';
-      drawer.dataset.open = open ? 'false' : 'true';
-    },
-  }, [
-    el('span', { class: 'drawer-unanchored__caret' }, '▸'),
-    `${unanchored.length} unanchored fact${unanchored.length === 1 ? '' : 's'}`,
-  ]);
-  const list = el('ul', { class: 'drawer-unanchored__list' });
-  for (const f of unanchored) list.append(renderFactCard(f));
-  drawer.append(toggle, list);
-  detail.append(drawer);
 }
 
 function emptyStreamCard(thing) {
@@ -2478,27 +2544,7 @@ async function refresh(opts = {}) {
     state.facts = facts;
     state.factIndex = buildFactIndex(facts, snapshot.entities);
 
-    // Inject the "You" synthetic node so preferences live on the graph
-    // alongside the real entities. Keep it out of the type-filter counts.
-    const selfNode = buildSelfNode();
-    graph.setData([selfNode, ...snapshot.entities], snapshot.relations);
-
-    // Build chip overlay: one entry per fact (attached to its subject
-    // entity) and one per preference (attached to the synthetic You).
-    const chipsByNode = new Map();
-    for (const [entityId, entityFacts] of state.factIndex.byEntity) {
-      chipsByNode.set(
-        entityId,
-        entityFacts.map((f) => ({ key: f.predicate, value: f.object, kind: 'fact' }))
-      );
-    }
-    if (preferences?.length) {
-      chipsByNode.set(
-        SELF_NODE_ID,
-        preferences.map((p) => ({ key: p.category, value: p.preference, kind: 'pref' }))
-      );
-    }
-    graph.setChips(chipsByNode);
+    rebuildGraphFromState();
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
     renderMessages(snapshot.recent_messages);
