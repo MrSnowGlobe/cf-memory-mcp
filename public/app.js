@@ -295,6 +295,8 @@ class GraphView {
     this.dragOffset = [0, 0];
     this.typeFilter = new Set(ENTITY_TYPES);
     this.searchHighlight = new Set();
+    this.showFacts = false;
+    this.factsByNode = new Map();
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
@@ -365,6 +367,15 @@ class GraphView {
   setSelected(id) {
     this.selectedId = id;
     this.alpha = Math.max(this.alpha, 0.4);
+  }
+
+  setShowFacts(on) {
+    this.showFacts = !!on;
+    this.alpha = Math.max(this.alpha, 0.15);
+  }
+
+  setFactIndex(map) {
+    this.factsByNode = map ?? new Map();
   }
 
   _isVisible(n) {
@@ -526,13 +537,65 @@ class GraphView {
       ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
       ctx.fill();
 
-      // Label (only for hovered, selected, or large nodes)
+      // Fact chips — small pills of predicate text stacked below the node.
+      // Cap at 3 so noisy entities don't swallow the canvas; overflow becomes
+      // a "+N more" chip the same shape.
+      let stackBottomY = n.y + r;
+      if (this.showFacts && !dimmed) {
+        const facts = this.factsByNode.get(n.id);
+        if (facts && facts.length) {
+          const MAX_CHIPS = 3;
+          const chipH = 12;
+          const gap = 3;
+          let cy = stackBottomY + 10;
+          ctx.font = '500 9px "IBM Plex Mono", monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const drawPill = (text, tone) => {
+            const w = Math.min(ctx.measureText(text).width + 10, 140);
+            const bx = n.x - w / 2;
+            const by = cy - chipH / 2;
+            const rr = 5;
+            ctx.beginPath();
+            ctx.moveTo(bx + rr, by);
+            ctx.lineTo(bx + w - rr, by);
+            ctx.arcTo(bx + w, by, bx + w, by + rr, rr);
+            ctx.lineTo(bx + w, by + chipH - rr);
+            ctx.arcTo(bx + w, by + chipH, bx + w - rr, by + chipH, rr);
+            ctx.lineTo(bx + rr, by + chipH);
+            ctx.arcTo(bx, by + chipH, bx, by + chipH - rr, rr);
+            ctx.lineTo(bx, by + rr);
+            ctx.arcTo(bx, by, bx + rr, by, rr);
+            ctx.closePath();
+            ctx.fillStyle = tone === 'more' ? 'rgba(80, 70, 55, 0.35)' : 'rgba(212, 165, 116, 0.14)';
+            ctx.strokeStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.3)' : 'rgba(212, 165, 116, 0.5)';
+            ctx.lineWidth = 0.6;
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = tone === 'more' ? 'rgba(212, 165, 116, 0.75)' : '#E8C08A';
+            ctx.fillText(text, n.x, cy);
+          };
+          const shown = facts.slice(0, MAX_CHIPS);
+          for (const f of shown) {
+            drawPill((f.predicate || '').slice(0, 20), 'chip');
+            cy += chipH + gap;
+          }
+          if (facts.length > MAX_CHIPS) {
+            drawPill(`+${facts.length - MAX_CHIPS} more`, 'more');
+            cy += chipH + gap;
+          }
+          stackBottomY = cy - gap - chipH / 2;
+        }
+      }
+
+      // Label (only for hovered, selected, or large nodes) — positioned
+      // below any fact chips so nothing overlaps.
       if (isHover || isSelected || (n.degree >= 3 && !focusId)) {
         ctx.font = `italic 12px "Fraunces", "Cormorant Garamond", serif`;
         const text = n.name;
         const tw = ctx.measureText(text).width;
         const tx = n.x;
-        const ty = n.y + r + 14;
+        const ty = stackBottomY + 14;
         ctx.fillStyle = 'rgba(11, 14, 15, 0.85)';
         ctx.fillRect(tx - tw / 2 - 5, ty - 10, tw + 10, 16);
         ctx.fillStyle = isSelected ? '#E8B96A' : '#F0E8D2';
@@ -1056,6 +1119,17 @@ function bindSearch() {
 }
 
 // ----- Traversal controls ---------------------------------------------------
+
+function bindFactsToggle() {
+  const btn = $('#toggle-facts');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const next = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', String(next));
+    btn.textContent = next ? 'on' : 'off';
+    graph.setShowFacts(next);
+  });
+}
 
 function bindTraversal() {
   const depth = $('#traverse-depth');
@@ -2384,6 +2458,7 @@ async function refresh(opts = {}) {
     // alongside the real entities. Keep it out of the type-filter counts.
     const selfNode = buildSelfNode();
     graph.setData([selfNode, ...snapshot.entities], snapshot.relations);
+    graph.setFactIndex(state.factIndex.byEntity);
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
     renderMessages(snapshot.recent_messages);
@@ -2407,6 +2482,7 @@ async function init() {
   bindSettings();
   bindSearch();
   bindTraversal();
+  bindFactsToggle();
   bindViewSwitch();
   bindLogin();
   bindGlobalSearch();

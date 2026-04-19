@@ -733,6 +733,27 @@ input[type="range"]::-moz-range-thumb {
   color: var(--long);
 }
 
+/* Single-state toggle (used for overlay on/off) */
+.toggle {
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 4px 12px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.toggle:hover { color: var(--ink-2); border-color: var(--rule-warm); }
+.toggle[aria-pressed="true"] {
+  background: linear-gradient(180deg, rgba(212, 165, 116, 0.15) 0%, rgba(212, 165, 116, 0.05) 100%);
+  color: var(--long);
+  border-color: var(--long);
+}
+
 /* --- Footnote --- */
 .footnote {
   font-family: var(--serif);
