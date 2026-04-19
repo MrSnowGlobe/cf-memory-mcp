@@ -477,19 +477,31 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
    Stats strip
    ============================================================ */
 
-.stats {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: calc(var(--u) * 2);
+.rail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--u);
 }
 
 .stat {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
   border: 1px solid var(--rule);
   border-radius: var(--r);
-  padding: calc(var(--u) * 2) calc(var(--u) * 2.5);
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
   position: relative;
   overflow: hidden;
+}
+
+/* Stat cards inside the left rail need slimmer rows so three of them
+   fit alongside the rest of the rail controls without overflowing. */
+.rail-stats .stat__row {
+  padding: 2px 0;
+}
+.rail-stats .stat__label {
+  font-size: 12px;
+}
+.rail-stats .stat__value {
+  font-size: 14px;
 }
 
 .stat::before {
@@ -511,7 +523,15 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   align-items: center;
   gap: var(--u);
   margin-bottom: var(--u);
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
 }
+.stat__head:hover .stat__tier { color: var(--ink-2); }
 .stat__tier {
   font-family: var(--mono);
   font-size: 10px;
@@ -519,7 +539,18 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   text-transform: uppercase;
   color: var(--tier-color, var(--muted));
 }
-.stat__rule { flex: 1; height: 1px; background: var(--rule); }
+.stat__caret {
+  flex: 1;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  transition: transform 160ms ease;
+  transform-origin: center;
+  display: inline-block;
+}
+.stat[aria-expanded="false"] .stat__caret { transform: rotate(-90deg); }
+.stat[aria-expanded="false"] .stat__body { display: none; }
+.stat[aria-expanded="false"] .stat__head { margin-bottom: 0; }
 
 .stat__row {
   display: flex;
@@ -552,8 +583,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
   gap: calc(var(--u) * 2);
-  min-height: 540px;
-  max-height: calc(100vh - 220px);
+  min-height: 500px;
+  max-height: calc(100vh - 120px);
 }
 
 .rail {
@@ -2083,6 +2114,115 @@ input[type="range"]::-moz-range-thumb {
 .tool-stats__rate--ok   { color: var(--success); }
 .tool-stats__rate--warn { color: var(--hot); }
 .tool-stats__rate--fail { color: var(--failure); }
+
+/* ============================================================
+   Timeline — dots per tier on a shared time axis with scrubber
+   ============================================================ */
+
+.timeline {
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: calc(var(--u) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--u);
+}
+.timeline__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 2);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: var(--u);
+}
+.timeline__head h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  color: var(--ink);
+  margin: 0;
+}
+.timeline__legend {
+  display: flex;
+  gap: calc(var(--u) * 2);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.timeline__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.timeline__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.timeline__legend-item[data-tier="long"]  .timeline__swatch { background: var(--long); }
+.timeline__legend-item[data-tier="short"] .timeline__swatch { background: var(--short); }
+.timeline__legend-item[data-tier="proc"]  .timeline__swatch { background: var(--proc); }
+.timeline__cursor-readout {
+  display: flex;
+  align-items: center;
+  gap: var(--u);
+}
+.timeline__cursor-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.timeline__cursor-label[data-scrubbing="true"] { color: var(--long); }
+.timeline__reset {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.timeline__reset:hover { color: var(--long); border-color: var(--long); }
+
+.timeline__frame {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--bg);
+}
+.timeline__frame canvas {
+  display: block;
+  width: 100%;
+  height: 90px;
+  cursor: crosshair;
+}
+
+.timeline__tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--inset);
+  border: 1px solid var(--rule-warm);
+  border-radius: var(--r);
+  padding: 5px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, calc(-100% - 8px));
+  z-index: 10;
+}
+.timeline__tooltip strong { color: var(--long); font-weight: 500; }
 
 /* ============================================================
    Trace inspector overlay

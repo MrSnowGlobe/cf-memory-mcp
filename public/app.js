@@ -423,6 +423,7 @@ class GraphView {
     this.typeFilter = new Set(ENTITY_TYPES);
     this.searchHighlight = new Set();
     this.showFacts = false;
+    this.asOfMs = null;
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
@@ -502,7 +503,13 @@ class GraphView {
     this.alpha = Math.max(this.alpha, 0.12);
   }
 
+  setAsOfMs(ms) {
+    this.asOfMs = ms;
+    this.alpha = Math.max(this.alpha, 0.12);
+  }
+
   _isVisible(n) {
+    if (!this._passesAsOf(n)) return false;
     // Diamond bloom gating: a fact/pref diamond only materialises when
     // its bloom source is the current selection's anchor (or for
     // unanchored facts, always).
@@ -512,6 +519,23 @@ class GraphView {
     }
     if (n.__synthetic) return true;
     return this.typeFilter.has(n.entity_type);
+  }
+
+  _passesAsOf(n) {
+    if (this.asOfMs == null) return true;
+    // The synthetic You node has no real creation time — it represents
+    // the user scope and should always be present when the overlay is on.
+    if (n.entity_type === 'SELF') return true;
+    const created = this._nodeCreatedMs(n);
+    if (created == null) return true;
+    return created <= this.asOfMs;
+  }
+
+  _nodeCreatedMs(n) {
+    if (n.__factNode && n.__fact) return Date.parse(n.__fact.created_at);
+    if (n.__prefNode && n.__pref) return Date.parse(n.__pref.created_at);
+    if (n.created_at) return Date.parse(n.created_at);
+    return null;
   }
 
   _bloomAnchor() {
@@ -893,6 +917,375 @@ function escapeHtml(s) {
   );
 }
 
+// ----- Timeline view --------------------------------------------------------
+//
+// One horizontal band with three lanes (long/short/proc), each entry plotted
+// at its created_at. Traces draw as a bar from started_at to completed_at.
+// A draggable cursor filters the rest of the view to an "as-of-time" slice.
+
+const TL_PAD_LEFT = 16;
+const TL_PAD_RIGHT = 16;
+// Lane y-coordinates (canvas is 90px tall; axis labels at bottom).
+const TL_LANE_Y = { long: 20, short: 38, proc: 56 };
+const TL_AXIS_Y = 72;
+const TL_TIER_COLOR = { long: '#D4A574', short: '#8FB892', proc: '#A87C9F' };
+
+class TimelineView {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.items = [];
+    this.domainStart = 0;
+    this.domainEnd = 0;
+    this.cursorMs = null;
+    this.hoverItem = null;
+    this.dpr = window.devicePixelRatio || 1;
+    this.onPickItem = null;
+    this.onCursorChange = null;
+    this._scrubbing = false;
+    this.fit();
+    this._wire();
+    window.addEventListener('resize', () => { this.fit(); this._draw(); });
+    if (typeof ResizeObserver !== 'undefined') {
+      this._ro = new ResizeObserver(() => { this.fit(); this._draw(); });
+      this._ro.observe(this.canvas);
+    }
+  }
+
+  fit() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.width = rect.width;
+    this.height = rect.height;
+    this.canvas.width = rect.width * this.dpr;
+    this.canvas.height = rect.height * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+  }
+
+  setItems(items) {
+    this.items = items;
+    if (items.length) {
+      const now = Date.now();
+      const times = items.flatMap((i) => [i.timestampMs, i.endMs ?? i.timestampMs]);
+      const earliest = Math.min(...times);
+      const latest = Math.max(now, ...times);
+      const span = Math.max(60_000, latest - earliest); // at least 1 min wide
+      this.domainStart = earliest - span * 0.04;
+      this.domainEnd = latest + span * 0.02;
+    } else {
+      this.domainEnd = Date.now();
+      this.domainStart = this.domainEnd - 86_400_000;
+    }
+    this._draw();
+  }
+
+  setCursor(ms) {
+    this.cursorMs = ms;
+    this._draw();
+  }
+
+  xForMs(ms) {
+    const span = this.domainEnd - this.domainStart;
+    if (span <= 0) return TL_PAD_LEFT;
+    const inner = this.width - TL_PAD_LEFT - TL_PAD_RIGHT;
+    return ((ms - this.domainStart) / span) * inner + TL_PAD_LEFT;
+  }
+  msForX(x) {
+    const inner = this.width - TL_PAD_LEFT - TL_PAD_RIGHT;
+    if (inner <= 0) return this.domainEnd;
+    const t = Math.max(0, Math.min(1, (x - TL_PAD_LEFT) / inner));
+    return this.domainStart + t * (this.domainEnd - this.domainStart);
+  }
+
+  _draw() {
+    const { ctx } = this;
+    ctx.clearRect(0, 0, this.width, this.height);
+
+    // Lane separators (faint dashed lines across the canvas).
+    ctx.strokeStyle = 'rgba(212, 165, 116, 0.08)';
+    ctx.lineWidth = 1;
+    for (const y of Object.values(TL_LANE_Y)) {
+      ctx.beginPath();
+      ctx.moveTo(TL_PAD_LEFT, y);
+      ctx.lineTo(this.width - TL_PAD_RIGHT, y);
+      ctx.stroke();
+    }
+
+    // Axis
+    ctx.strokeStyle = 'rgba(212, 165, 116, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(TL_PAD_LEFT, TL_AXIS_Y);
+    ctx.lineTo(this.width - TL_PAD_RIGHT, TL_AXIS_Y);
+    ctx.stroke();
+
+    // Ticks
+    this._drawTicks();
+
+    // Items
+    const cursor = this.cursorMs;
+    for (const it of this.items) {
+      const faded = cursor != null && it.timestampMs > cursor;
+      this._drawItem(it, faded);
+    }
+
+    // Scrubber — always draw a small "now" marker at the right edge,
+    // and the user-draggable cursor when set.
+    if (cursor != null) {
+      this._drawCursor(this.xForMs(cursor), '#E8C08A', 2);
+    }
+  }
+
+  _drawTicks() {
+    const { ctx } = this;
+    const span = this.domainEnd - this.domainStart;
+    if (span <= 0) return;
+    // Pick a tick step that gives roughly 4-8 labels across the axis.
+    const steps = [
+      60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 3600_000, 6 * 3600_000,
+      12 * 3600_000, 86_400_000, 3 * 86_400_000, 7 * 86_400_000, 14 * 86_400_000,
+      30 * 86_400_000, 90 * 86_400_000,
+    ];
+    const target = span / 6;
+    let step = steps[0];
+    for (const s of steps) if (s <= target) step = s;
+
+    ctx.font = '10px "IBM Plex Mono", monospace';
+    ctx.fillStyle = 'rgba(139, 129, 112, 0.8)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    const first = Math.ceil(this.domainStart / step) * step;
+    for (let t = first; t <= this.domainEnd; t += step) {
+      const x = this.xForMs(t);
+      ctx.strokeStyle = 'rgba(212, 165, 116, 0.12)';
+      ctx.beginPath();
+      ctx.moveTo(x, TL_AXIS_Y - 3);
+      ctx.lineTo(x, TL_AXIS_Y + 3);
+      ctx.stroke();
+      ctx.fillText(formatTickLabel(t, step), x, TL_AXIS_Y + 6);
+    }
+  }
+
+  _drawItem(it, faded) {
+    const { ctx } = this;
+    const x = this.xForMs(it.timestampMs);
+    const y = TL_LANE_Y[it.tier] ?? TL_LANE_Y.long;
+    const color = TL_TIER_COLOR[it.tier] ?? TL_TIER_COLOR.long;
+    const alpha = faded ? 0.18 : 0.85;
+    ctx.globalAlpha = alpha;
+
+    if (it.endMs != null) {
+      // Bar (trace duration)
+      const x2 = this.xForMs(it.endMs);
+      const barH = 5;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y - barH / 2, Math.max(2, x2 - x), barH);
+      if (this.hoverItem === it) {
+        ctx.strokeStyle = '#F0E8D2';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - 0.5, y - barH / 2 - 0.5, Math.max(2, x2 - x) + 1, barH + 1);
+      }
+    } else {
+      // Dot
+      const r = this.hoverItem === it ? 4 : 3;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      if (this.hoverItem === it) {
+        ctx.strokeStyle = '#F0E8D2';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  _drawCursor(x, color, width) {
+    const { ctx } = this;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(x, 4);
+    ctx.lineTo(x, TL_AXIS_Y);
+    ctx.stroke();
+
+    // Handle at top
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, 2);
+    ctx.lineTo(x + 5, 2);
+    ctx.lineTo(x, 10);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  _hitItem(x, y) {
+    // Look for the closest item within a pixel threshold, prioritising
+    // the lane whose y is nearest the cursor.
+    let best = null;
+    let bestDist = Infinity;
+    for (const it of this.items) {
+      const ix = this.xForMs(it.timestampMs);
+      const iy = TL_LANE_Y[it.tier] ?? TL_LANE_Y.long;
+      let dx = 0;
+      if (it.endMs != null) {
+        const ix2 = this.xForMs(it.endMs);
+        if (x < ix) dx = ix - x;
+        else if (x > ix2) dx = x - ix2;
+        else dx = 0;
+      } else {
+        dx = Math.abs(x - ix);
+      }
+      const dy = Math.abs(y - iy);
+      if (dx <= 4 && dy <= 8) {
+        const d = dx * dx + dy * dy;
+        if (d < bestDist) { best = it; bestDist = d; }
+      }
+    }
+    return best;
+  }
+
+  _wire() {
+    const c = this.canvas;
+    const tooltip = $('#timeline-tooltip');
+
+    c.addEventListener('mousedown', (e) => {
+      const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      this._scrubbing = true;
+      const ms = this.msForX(x);
+      this.setCursor(ms);
+      if (this.onCursorChange) this.onCursorChange(ms);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!this._scrubbing) return;
+      const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const ms = this.msForX(x);
+      this.setCursor(ms);
+      if (this.onCursorChange) this.onCursorChange(ms);
+    });
+
+    window.addEventListener('mouseup', () => {
+      this._scrubbing = false;
+    });
+
+    c.addEventListener('mousemove', (e) => {
+      if (this._scrubbing) return;
+      const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const prev = this.hoverItem;
+      this.hoverItem = this._hitItem(x, y);
+      if (prev !== this.hoverItem) this._draw();
+      if (this.hoverItem && tooltip) {
+        tooltip.hidden = false;
+        tooltip.innerHTML =
+          `<strong>${escapeHtml(this.hoverItem.label)}</strong> · ${fmtTime(new Date(this.hoverItem.timestampMs).toISOString())}`;
+        tooltip.style.left = `${x}px`;
+        tooltip.style.top = `${y}px`;
+      } else if (tooltip) {
+        tooltip.hidden = true;
+      }
+    });
+
+    c.addEventListener('mouseleave', () => {
+      this.hoverItem = null;
+      if (tooltip) tooltip.hidden = true;
+      this._draw();
+    });
+
+    c.addEventListener('click', () => {
+      if (!this.hoverItem || !this.onPickItem) return;
+      this.onPickItem(this.hoverItem);
+    });
+  }
+}
+
+function formatTickLabel(ms, step) {
+  const d = new Date(ms);
+  if (step < 86_400_000) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Collect every timestamped entry in the current scope into a flat list
+ * suitable for plotting on the timeline.
+ */
+function buildTimelineItems() {
+  const items = [];
+  const snap = state.snapshot;
+  if (!snap) return items;
+
+  for (const e of snap.entities) {
+    items.push({
+      id: e.id,
+      tier: 'long',
+      kind: 'entity',
+      timestampMs: Date.parse(e.created_at),
+      label: `${e.entity_type} · ${e.name}`,
+      source: e,
+    });
+  }
+  for (const r of snap.relations) {
+    items.push({
+      id: r.id,
+      tier: 'long',
+      kind: 'relation',
+      timestampMs: Date.parse(r.created_at),
+      label: `relation · ${r.relation_type}`,
+      source: r,
+    });
+  }
+  for (const p of state.preferences ?? []) {
+    items.push({
+      id: p.id,
+      tier: 'long',
+      kind: 'pref',
+      timestampMs: Date.parse(p.created_at),
+      label: `pref · ${p.category}`,
+      source: p,
+    });
+  }
+  for (const f of state.facts ?? []) {
+    items.push({
+      id: f.id,
+      tier: 'long',
+      kind: 'fact',
+      timestampMs: Date.parse(f.created_at),
+      label: `fact · ${f.subject} ${f.predicate}`,
+      source: f,
+    });
+  }
+  for (const m of snap.recent_messages ?? []) {
+    items.push({
+      id: m.id,
+      tier: 'short',
+      kind: 'message',
+      timestampMs: Date.parse(m.created_at),
+      label: `${m.role}: ${(m.content || '').slice(0, 48)}`,
+      source: m,
+    });
+  }
+  for (const t of snap.recent_traces ?? []) {
+    const start = Date.parse(t.started_at);
+    const end = t.completed_at ? Date.parse(t.completed_at) : null;
+    items.push({
+      id: t.id,
+      tier: 'proc',
+      kind: 'trace',
+      timestampMs: start,
+      endMs: end,
+      label: `trace · ${t.task}`,
+      source: t,
+    });
+  }
+  return items;
+}
+
 // ----- App state ------------------------------------------------------------
 
 const state = {
@@ -906,7 +1299,11 @@ const state = {
   facts: [],
   factIndex: { byEntity: new Map(), unanchored: [] },
   showFacts: false,
+  // Timeline scrubber — null means "as of now" (no filter).
+  asOfMs: null,
 };
+
+let timeline;
 
 let graph;
 
@@ -999,10 +1396,59 @@ function renderStats(stats) {
   }
 }
 
+// ----- Stat card collapse ---------------------------------------------------
+
+const STATS_COLLAPSE_KEY = 'observatory.stats.collapse.v1';
+
+function loadStatsCollapse() {
+  try {
+    const raw = localStorage.getItem(STATS_COLLAPSE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStatsCollapse(s) {
+  try { localStorage.setItem(STATS_COLLAPSE_KEY, JSON.stringify(s)); } catch {}
+}
+
+function bindStatsCollapse() {
+  const saved = loadStatsCollapse();
+  for (const card of $$('.stat')) {
+    const tier = card.dataset.tier;
+    // Default: expanded. Only collapse if the saved state explicitly says so.
+    const expanded = saved[tier] !== false;
+    card.setAttribute('aria-expanded', String(expanded));
+
+    const head = card.querySelector('.stat__head');
+    head?.addEventListener('click', () => {
+      const next = card.getAttribute('aria-expanded') !== 'true';
+      card.setAttribute('aria-expanded', String(next));
+      const current = loadStatsCollapse();
+      current[tier] = next;
+      saveStatsCollapse(current);
+    });
+  }
+}
+
 // ----- Streams (messages & traces) ------------------------------------------
 
 function freshClass(id) {
   return liveState.freshIds.has(id) ? ' is-fresh' : '';
+}
+
+/**
+ * Filter messages + traces by the timeline cursor and re-render both
+ * strips. Called by refresh() after a load and by the scrubber whenever
+ * the cursor moves.
+ */
+function renderStreamsForAsOf() {
+  const ms = state.asOfMs;
+  const passesMsg = (m) => ms == null || Date.parse(m.created_at) <= ms;
+  const passesTrace = (t) => ms == null || Date.parse(t.started_at) <= ms;
+  renderMessages((state.messages ?? []).filter(passesMsg));
+  renderTraces((state.traces ?? []).filter(passesTrace));
 }
 
 function renderMessages(messages) {
@@ -1263,33 +1709,6 @@ function openEntityEdit(card, entity) {
     ])
   );
   card.append(form);
-}
-
-// ----- Search ---------------------------------------------------------------
-
-let searchTimer = null;
-
-function bindSearch() {
-  const input = $('#search-input');
-  input.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    const q = input.value.trim();
-    if (!q) {
-      graph.setSearchHighlight([]);
-      return;
-    }
-    searchTimer = setTimeout(async () => {
-      try {
-        const results = await api('/api/v1/entities/search', {
-          method: 'POST',
-          body: JSON.stringify({ query: q, limit: 10 }),
-        });
-        graph.setSearchHighlight(results.map((r) => r.id));
-      } catch (err) {
-        showToast(`Search failed: ${err.message}`);
-      }
-    }, 250);
-  });
 }
 
 // ----- Traversal controls ---------------------------------------------------
@@ -2759,7 +3178,7 @@ async function refresh(opts = {}) {
     // their list endpoints so the inline Records section can show everything,
     // not just the first 15.
     const [snapshot, preferences, facts, toolStats] = await Promise.all([
-      api('/api/v1/snapshot?entity_limit=200&relation_limit=500'),
+      api('/api/v1/snapshot?entity_limit=200&relation_limit=500&message_limit=200&trace_limit=200'),
       api('/api/v1/preferences'),
       api('/api/v1/facts'),
       api('/api/v1/tool-stats').catch(() => []),
@@ -2778,14 +3197,16 @@ async function refresh(opts = {}) {
     state.preferences = preferences;
     state.facts = facts;
     state.factIndex = buildFactIndex(facts, snapshot.entities);
+    state.messages = snapshot.recent_messages ?? [];
+    state.traces = snapshot.recent_traces ?? [];
 
     rebuildGraphFromState();
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
-    renderMessages(snapshot.recent_messages);
-    renderTraces(snapshot.recent_traces);
+    renderStreamsForAsOf();
     renderToolStats(toolStats);
     renderDetailPlaceholder();
+    timeline?.setItems(buildTimelineItems());
 
     setStatus('ok', 'connected');
   } catch (err) {
@@ -2795,14 +3216,80 @@ async function refresh(opts = {}) {
   }
 }
 
+// ----- Timeline scrubber ----------------------------------------------------
+
+function applyAsOfCursor(ms) {
+  state.asOfMs = ms;
+  graph.setAsOfMs(ms);
+  renderStreamsForAsOf();
+  updateCursorReadout();
+}
+
+function resetAsOfCursor() {
+  state.asOfMs = null;
+  graph.setAsOfMs(null);
+  timeline?.setCursor(null);
+  renderStreamsForAsOf();
+  updateCursorReadout();
+}
+
+function updateCursorReadout() {
+  const label = $('#timeline-cursor-label');
+  const reset = $('#timeline-reset');
+  if (!label) return;
+  if (state.asOfMs == null) {
+    label.textContent = 'now';
+    label.dataset.scrubbing = 'false';
+    if (reset) reset.hidden = true;
+  } else {
+    label.textContent = fmtTime(new Date(state.asOfMs).toISOString());
+    label.dataset.scrubbing = 'true';
+    if (reset) reset.hidden = false;
+  }
+}
+
+function bindTimelineReset() {
+  const btn = $('#timeline-reset');
+  if (!btn) return;
+  btn.addEventListener('click', resetAsOfCursor);
+}
+
+function onTimelinePick(item) {
+  // Route timeline clicks to the same surfaces a direct click in the
+  // main view would hit.
+  if (item.kind === 'entity') {
+    const local = graph.byId.get(item.id);
+    if (local) selectEntity(local);
+  } else if (item.kind === 'fact') {
+    const detail = $('#detail');
+    detail.innerHTML = '';
+    renderFactDetail(detail, item.source);
+  } else if (item.kind === 'pref') {
+    const detail = $('#detail');
+    detail.innerHTML = '';
+    renderPrefDetail(detail, item.source);
+  } else if (item.kind === 'trace') {
+    openTraceInspector(item.id);
+  } else if (item.kind === 'relation') {
+    // Select the source entity so the user can see where the edge lives.
+    const local = graph.byId.get(item.source.source_entity_id);
+    if (local) selectEntity(local);
+  }
+  // Messages have no detail surface yet — fall through silently.
+}
+
 // ----- Init -----------------------------------------------------------------
 
 async function init() {
   graph = new GraphView($('#graph'));
   graph.onSelect = selectEntity;
   graph.onDeselect = deselectEntity;
+  timeline = new TimelineView($('#timeline'));
+  timeline.onCursorChange = applyAsOfCursor;
+  timeline.onPickItem = onTimelinePick;
+  bindTimelineReset();
+  bindStatsCollapse();
   bindSettings();
-  bindSearch();
   bindTraversal();
   bindFactsToggle();
   bindViewSwitch();
