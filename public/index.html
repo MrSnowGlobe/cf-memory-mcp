@@ -387,8 +387,21 @@
           <header class="atlas__head">
             <h2>Projects</h2>
             <span class="atlas__count" id="atlas-projects-count">0</span>
+            <button type="button" class="atlas__action" id="atlas-register-btn">+ Register</button>
           </header>
-          <p class="atlas__hint">Click any project to scope the Observatory to it.</p>
+          <p class="atlas__hint">
+            Click any project to scope the Observatory to it.
+            <label class="atlas__toggle">
+              <input type="checkbox" id="atlas-show-archived" />
+              show archived
+            </label>
+          </p>
+          <form class="atlas__register" id="atlas-register-form" hidden>
+            <input type="text" id="atlas-register-id" placeholder="project-id (a-z, 0-9, _-)" required />
+            <input type="text" id="atlas-register-name" placeholder="Display name (optional)" />
+            <button type="submit">Register</button>
+            <button type="button" id="atlas-register-cancel">Cancel</button>
+          </form>
           <ul class="cards" id="atlas-projects"></ul>
         </div>
 

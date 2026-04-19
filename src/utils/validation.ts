@@ -240,6 +240,21 @@ export const CreateProjectSchema = z.object({
 });
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
 
+export const UpdateProjectSchema = z
+  .object({
+    display_name: z.string().max(MAX_SHORT_STRING).optional(),
+    archived: z.boolean().optional(),
+    metadata: metadataSchema,
+  })
+  .refine(
+    (v) =>
+      v.display_name !== undefined ||
+      v.archived !== undefined ||
+      v.metadata !== undefined,
+    { message: 'Provide at least one field to update' }
+  );
+export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
+
 // ============================================================
 // Pagination & Filters
 // ============================================================

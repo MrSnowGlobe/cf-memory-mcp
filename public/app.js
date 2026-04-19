@@ -1704,10 +1704,15 @@ function renderProjectCards(projects) {
     const total = p.entities + p.sessions + p.traces + p.preferences + p.facts;
     const isActive = p.id === settings.projectId;
     const flavor = p.id === 'global' ? 'global' : 'project';
-    const item = el('li', {
-      class: `card${total === 0 ? ' is-empty' : ''}${isActive ? ' is-active' : ''}`,
-      dataset: { flavor },
-    }, [
+    const isReserved = p.id === 'default' || p.id === 'global';
+    const cls = [
+      'card',
+      total === 0 ? 'is-empty' : '',
+      isActive ? 'is-active' : '',
+      p.archived ? 'is-archived' : '',
+    ].filter(Boolean).join(' ');
+
+    const item = el('li', { class: cls, dataset: { flavor } }, [
       el('div', { class: 'card__head' }, [
         el('span', { class: 'card__name' }, p.display_name || p.id),
         el('span', { class: 'card__id' }, p.id),
@@ -1728,10 +1733,34 @@ function renderProjectCards(projects) {
       ]),
     ]);
 
+    if (!isReserved) {
+      const actions = el('div', { class: 'card__actions' });
+      const archiveBtn = el(
+        'button',
+        { type: 'button', class: 'card__action' },
+        p.archived ? 'unarchive' : 'archive'
+      );
+      archiveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void toggleProjectArchived(p);
+      });
+      actions.append(archiveBtn);
+
+      if (total === 0) {
+        const deleteBtn = el('button', { type: 'button', class: 'card__action' }, 'delete');
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void deleteProject(p);
+        });
+        actions.append(deleteBtn);
+      }
+      item.append(actions);
+    }
+
     // Click anywhere on the card body to set just the project (keeps current user)
     item.addEventListener('click', (e) => {
-      // Ignore clicks that originated on a chip (chips have their own handler)
-      if (e.target instanceof HTMLElement && e.target.closest('.chip')) return;
+      // Ignore clicks that originated on a chip or action button
+      if (e.target instanceof HTMLElement && e.target.closest('.chip, .card__action')) return;
       applyScope(p.id, settings.userId, 'project');
     });
 
@@ -1742,6 +1771,44 @@ function renderProjectCards(projects) {
     }
 
     list.append(item);
+  }
+}
+
+async function toggleProjectArchived(p) {
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(p.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archived: !p.archived }),
+    });
+    showToast(`${p.id} ${p.archived ? 'unarchived' : 'archived'}`, 'success');
+    await loadAtlas();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function deleteProject(p) {
+  if (!confirm(`Delete project '${p.id}'? This is irreversible.`)) return;
+  try {
+    await api(`/api/v1/projects/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+    showToast(`${p.id} deleted`, 'success');
+    await loadAtlas();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function registerProject(id, displayName) {
+  try {
+    await api('/api/v1/projects', {
+      method: 'POST',
+      body: JSON.stringify({ id, display_name: displayName || undefined }),
+    });
+    showToast(`registered ${id}`, 'success');
+    await loadAtlas();
+  } catch (err) {
+    showToast(err.message);
+    throw err;
   }
 }
 
@@ -1861,7 +1928,9 @@ function switchView(view) {
 async function loadAtlas() {
   setStatus('loading', 'fetching');
   try {
-    const atlas = await api('/api/v1/atlas');
+    const showArchived = $('#atlas-show-archived')?.checked;
+    const qs = showArchived ? '?include_archived=true' : '';
+    const atlas = await api('/api/v1/atlas' + qs);
     state.atlas = atlas;
     renderAtlas(atlas);
     setStatus('ok', 'connected');
@@ -1878,6 +1947,48 @@ function bindViewSwitch() {
       switchView(view);
       if (view === 'atlas') void loadAtlas();
     });
+  }
+}
+
+function bindAtlasControls() {
+  const form = $('#atlas-register-form');
+  const btn = $('#atlas-register-btn');
+  const cancel = $('#atlas-register-cancel');
+  const idInput = $('#atlas-register-id');
+  const nameInput = $('#atlas-register-name');
+  const showArchived = $('#atlas-show-archived');
+
+  if (btn && form) {
+    btn.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      if (!form.hidden) idInput?.focus();
+    });
+  }
+  if (cancel && form) {
+    cancel.addEventListener('click', () => {
+      form.hidden = true;
+      if (idInput) idInput.value = '';
+      if (nameInput) nameInput.value = '';
+    });
+  }
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = idInput?.value.trim();
+      const name = nameInput?.value.trim();
+      if (!id) return;
+      try {
+        await registerProject(id, name);
+        form.hidden = true;
+        if (idInput) idInput.value = '';
+        if (nameInput) nameInput.value = '';
+      } catch {
+        // toast already shown
+      }
+    });
+  }
+  if (showArchived) {
+    showArchived.addEventListener('change', () => void loadAtlas());
   }
 }
 
@@ -2695,6 +2806,7 @@ async function init() {
   bindTraversal();
   bindFactsToggle();
   bindViewSwitch();
+  bindAtlasControls();
   bindLogin();
   bindGlobalSearch();
   bindTraceInspector();

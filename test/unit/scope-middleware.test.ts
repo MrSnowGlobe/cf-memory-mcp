@@ -5,6 +5,8 @@ import {
   applyMigrations,
   clearAllTables,
   createTestEnv,
+  seedProject,
+  seedUser,
 } from '../helpers/setup';
 import type { TestEnv } from '../helpers/setup';
 
@@ -18,6 +20,8 @@ describe('scope middleware — query param fallback', () => {
   });
 
   it('reads X-Project-Id header when present', async () => {
+    await seedProject(env.DB, 'from-header');
+    await seedUser(env.DB, 'u-from-header');
     const res = await app.request(
       '/api/v1/sessions',
       {
@@ -39,6 +43,8 @@ describe('scope middleware — query param fallback', () => {
   });
 
   it('falls back to ?project_id= and ?user_id= query params', async () => {
+    await seedProject(env.DB, 'from-query');
+    await seedUser(env.DB, 'u-from-query');
     const res = await app.request(
       '/api/v1/sessions?project_id=from-query&user_id=u-from-query',
       {
@@ -58,10 +64,8 @@ describe('scope middleware — query param fallback', () => {
   });
 
   it('header wins over query param when both are present', async () => {
-    // Distinct ids so we don't collide with the module-level seen-id cache
-    // in the scope middlewares (existing test-isolation quirk; in prod the
-    // DB row from that cache still exists, in tests clearAllTables wipes
-    // the row but not the cache).
+    await seedProject(env.DB, 'h-proj-both');
+    await seedUser(env.DB, 'h-user-both');
     const res = await app.request(
       '/api/v1/sessions?project_id=q-proj-both&user_id=q-user-both',
       {
@@ -80,6 +84,27 @@ describe('scope middleware — query param fallback', () => {
     const row = (await res.json()) as { project_id: string; user_id: string };
     expect(row.project_id).toBe('h-proj-both');
     expect(row.user_id).toBe('h-user-both');
+  });
+
+  it('rejects unregistered project IDs with 404 and registration hint', async () => {
+    const res = await app.request(
+      '/api/v1/sessions',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer test-token',
+          'Content-Type': 'application/json',
+          'X-Project-Id': 'never-registered-xyz',
+          'X-User-Id': 'default',
+        },
+        body: JSON.stringify({ id: 'sess-unknown' }),
+      },
+      testEnv
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { code: string; project_id: string };
+    expect(body.code).toBe('PROJECT_NOT_REGISTERED');
+    expect(body.project_id).toBe('never-registered-xyz');
   });
 
   it('defaults to "default" when neither header nor query is provided', async () => {

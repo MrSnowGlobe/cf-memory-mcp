@@ -32,6 +32,7 @@ export interface ProjectRow {
   display_name: string | null;
   created_at: string;
   metadata: string; // JSON string
+  archived: number; // 0 | 1
 }
 
 export interface UserRow {

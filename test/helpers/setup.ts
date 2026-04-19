@@ -39,9 +39,16 @@ export async function clearAllTables(db: D1Database): Promise<void> {
     await db.prepare(`DELETE FROM ${table}`).run();
   }
 
-  // Re-seed global project
+  // Re-seed built-in projects. `default` is the fallback scope used
+  // when no X-Project-Id is provided; `global` is the cascading-read
+  // namespace. Both must exist after clearAllTables so tests that
+  // rely on default scope aren't blocked by FK failures or the
+  // registration gate.
   await db
     .prepare("INSERT INTO projects (id, display_name) VALUES ('global', 'Global Memory')")
+    .run();
+  await db
+    .prepare("INSERT INTO projects (id, display_name) VALUES ('default', 'Default')")
     .run();
 
   // Re-seed users
