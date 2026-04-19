@@ -1432,6 +1432,24 @@ function bindStatsCollapse() {
   }
 }
 
+// Generic localStorage-backed collapse binding for a single section.
+// Used for the activity streams and the tool-stats panel.
+function bindSectionCollapse(sectionSelector, headSelector, storageKey, defaultExpanded) {
+  const section = $(sectionSelector);
+  if (!section) return;
+  const head = section.querySelector(headSelector);
+  const stored = (() => {
+    try { return localStorage.getItem(storageKey); } catch { return null; }
+  })();
+  const initial = stored == null ? defaultExpanded : stored === 'true';
+  section.setAttribute('aria-expanded', String(initial));
+  head?.addEventListener('click', () => {
+    const next = section.getAttribute('aria-expanded') !== 'true';
+    section.setAttribute('aria-expanded', String(next));
+    try { localStorage.setItem(storageKey, String(next)); } catch {}
+  });
+}
+
 // ----- Streams (messages & traces) ------------------------------------------
 
 function freshClass(id) {
@@ -1454,6 +1472,8 @@ function renderStreamsForAsOf() {
 function renderMessages(messages) {
   const list = $('#stream-messages');
   $('#stream-messages-count').textContent = messages.length;
+  const summary = $('#streams-msg-summary');
+  if (summary) summary.textContent = `${messages.length} message${messages.length === 1 ? '' : 's'}`;
   list.innerHTML = '';
   if (!messages.length) {
     list.append(emptyStreamCard('messages'));
@@ -1473,6 +1493,8 @@ function renderMessages(messages) {
 function renderTraces(traces) {
   const list = $('#stream-traces');
   $('#stream-traces-count').textContent = traces.length;
+  const summary = $('#streams-trace-summary');
+  if (summary) summary.textContent = `${traces.length} trace${traces.length === 1 ? '' : 's'}`;
   list.innerHTML = '';
   if (!traces.length) {
     list.append(emptyStreamCard('traces'));
@@ -3289,6 +3311,8 @@ async function init() {
   timeline.onPickItem = onTimelinePick;
   bindTimelineReset();
   bindStatsCollapse();
+  bindSectionCollapse('.streams', '.streams__head', 'observatory.streams.expanded.v1', true);
+  bindSectionCollapse('.tool-stats', '.tool-stats__head', 'observatory.toolstats.expanded.v1', false);
   bindSettings();
   bindTraversal();
   bindFactsToggle();
