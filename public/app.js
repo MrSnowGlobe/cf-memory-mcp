@@ -935,6 +935,10 @@ class TimelineView {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.items = [];
+    // Full data-driven domain (never changes per interaction).
+    this.fullDomainStart = 0;
+    this.fullDomainEnd = 0;
+    // Currently-rendered domain. Equals full unless zoomed.
     this.domainStart = 0;
     this.domainEnd = 0;
     this.cursorMs = null;
@@ -942,7 +946,10 @@ class TimelineView {
     this.dpr = window.devicePixelRatio || 1;
     this.onPickItem = null;
     this.onCursorChange = null;
+    this.onZoomChange = null;
     this._scrubbing = false;
+    this._selectStartX = null;
+    this._selectEndX = null;
     this.fit();
     this._wire();
     window.addEventListener('resize', () => { this.fit(); this._draw(); });
@@ -950,6 +957,28 @@ class TimelineView {
       this._ro = new ResizeObserver(() => { this.fit(); this._draw(); });
       this._ro.observe(this.canvas);
     }
+  }
+
+  get isZoomed() {
+    return this.domainStart !== this.fullDomainStart || this.domainEnd !== this.fullDomainEnd;
+  }
+
+  zoomTo(startMs, endMs) {
+    // Clamp to full data domain, enforce a 2s minimum window.
+    const lo = Math.max(this.fullDomainStart, Math.min(startMs, endMs));
+    const hi = Math.min(this.fullDomainEnd, Math.max(startMs, endMs));
+    if (hi - lo < 2000) return;
+    this.domainStart = lo;
+    this.domainEnd = hi;
+    this._draw();
+    if (this.onZoomChange) this.onZoomChange(this.isZoomed ? { startMs: lo, endMs: hi } : null);
+  }
+
+  resetZoom() {
+    this.domainStart = this.fullDomainStart;
+    this.domainEnd = this.fullDomainEnd;
+    this._draw();
+    if (this.onZoomChange) this.onZoomChange(null);
   }
 
   fit() {
@@ -963,17 +992,34 @@ class TimelineView {
 
   setItems(items) {
     this.items = items;
+    const prevZoomed = this.isZoomed;
+    const prevStart = this.domainStart;
+    const prevEnd = this.domainEnd;
+
     if (items.length) {
       const now = Date.now();
       const times = items.flatMap((i) => [i.timestampMs, i.endMs ?? i.timestampMs]);
       const earliest = Math.min(...times);
       const latest = Math.max(now, ...times);
-      const span = Math.max(60_000, latest - earliest); // at least 1 min wide
-      this.domainStart = earliest - span * 0.04;
-      this.domainEnd = latest + span * 0.02;
+      const span = Math.max(60_000, latest - earliest);
+      this.fullDomainStart = earliest - span * 0.04;
+      this.fullDomainEnd = latest + span * 0.02;
     } else {
-      this.domainEnd = Date.now();
-      this.domainStart = this.domainEnd - 86_400_000;
+      this.fullDomainEnd = Date.now();
+      this.fullDomainStart = this.fullDomainEnd - 86_400_000;
+    }
+    // Preserve an active zoom across refresh, clamping if the new full
+    // domain is narrower. Otherwise follow the full domain.
+    if (prevZoomed) {
+      this.domainStart = Math.max(this.fullDomainStart, prevStart);
+      this.domainEnd = Math.min(this.fullDomainEnd, prevEnd);
+      if (this.domainEnd - this.domainStart < 2000) {
+        this.domainStart = this.fullDomainStart;
+        this.domainEnd = this.fullDomainEnd;
+      }
+    } else {
+      this.domainStart = this.fullDomainStart;
+      this.domainEnd = this.fullDomainEnd;
     }
     this._draw();
   }
@@ -1031,6 +1077,17 @@ class TimelineView {
     // and the user-draggable cursor when set.
     if (cursor != null) {
       this._drawCursor(this.xForMs(cursor), '#E8C08A', 2);
+    }
+
+    // Zoom selection rectangle (shift-drag in progress)
+    if (this._selectStartX != null && this._selectEndX != null) {
+      const a = Math.min(this._selectStartX, this._selectEndX);
+      const b = Math.max(this._selectStartX, this._selectEndX);
+      ctx.fillStyle = 'rgba(212, 165, 116, 0.18)';
+      ctx.fillRect(a, 2, b - a, TL_AXIS_Y - 2);
+      ctx.strokeStyle = 'rgba(232, 185, 106, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(a + 0.5, 2.5, b - a - 1, TL_AXIS_Y - 3);
     }
   }
 
@@ -1152,27 +1209,50 @@ class TimelineView {
     c.addEventListener('mousedown', (e) => {
       const rect = c.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      this._scrubbing = true;
-      const ms = this.msForX(x);
-      this.setCursor(ms);
-      if (this.onCursorChange) this.onCursorChange(ms);
+      if (e.shiftKey) {
+        // Start a zoom selection rectangle.
+        this._selectStartX = x;
+        this._selectEndX = x;
+        this._draw();
+      } else {
+        this._scrubbing = true;
+        const ms = this.msForX(x);
+        this.setCursor(ms);
+        if (this.onCursorChange) this.onCursorChange(ms);
+      }
     });
 
     window.addEventListener('mousemove', (e) => {
-      if (!this._scrubbing) return;
       const rect = c.getBoundingClientRect();
       const x = e.clientX - rect.left;
+      if (this._selectStartX != null) {
+        this._selectEndX = Math.max(0, Math.min(this.width, x));
+        this._draw();
+        return;
+      }
+      if (!this._scrubbing) return;
       const ms = this.msForX(x);
       this.setCursor(ms);
       if (this.onCursorChange) this.onCursorChange(ms);
     });
 
     window.addEventListener('mouseup', () => {
+      if (this._selectStartX != null && this._selectEndX != null) {
+        const a = Math.min(this._selectStartX, this._selectEndX);
+        const b = Math.max(this._selectStartX, this._selectEndX);
+        this._selectStartX = null;
+        this._selectEndX = null;
+        if (b - a >= 6) {
+          this.zoomTo(this.msForX(a), this.msForX(b));
+        } else {
+          this._draw();
+        }
+      }
       this._scrubbing = false;
     });
 
     c.addEventListener('mousemove', (e) => {
-      if (this._scrubbing) return;
+      if (this._scrubbing || this._selectStartX != null) return;
       const rect = c.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -1196,9 +1276,37 @@ class TimelineView {
       this._draw();
     });
 
-    c.addEventListener('click', () => {
+    c.addEventListener('click', (e) => {
+      if (e.shiftKey) return; // shift-click was for selection
       if (!this.hoverItem || !this.onPickItem) return;
       this.onPickItem(this.hoverItem);
+    });
+
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = c.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const focusMs = this.msForX(x);
+      const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25; // scroll up = zoom in
+      const newSpan = (this.domainEnd - this.domainStart) * zoomFactor;
+      const fullSpan = this.fullDomainEnd - this.fullDomainStart;
+      if (newSpan >= fullSpan) {
+        this.resetZoom();
+        return;
+      }
+      if (newSpan < 2000) return; // floor: 2s window
+      // Keep focusMs at the same x fraction after zoom
+      const frac = (focusMs - this.domainStart) / (this.domainEnd - this.domainStart);
+      let start = focusMs - newSpan * frac;
+      let end = start + newSpan;
+      // Clamp to full domain
+      if (start < this.fullDomainStart) { start = this.fullDomainStart; end = start + newSpan; }
+      if (end > this.fullDomainEnd)     { end = this.fullDomainEnd; start = end - newSpan; }
+      this.zoomTo(start, end);
+    }, { passive: false });
+
+    c.addEventListener('dblclick', () => {
+      if (this.isZoomed) this.resetZoom();
     });
   }
 }
@@ -3273,8 +3381,24 @@ function updateCursorReadout() {
 
 function bindTimelineReset() {
   const btn = $('#timeline-reset');
-  if (!btn) return;
-  btn.addEventListener('click', resetAsOfCursor);
+  if (btn) btn.addEventListener('click', resetAsOfCursor);
+  const zoomBtn = $('#timeline-reset-zoom');
+  if (zoomBtn) zoomBtn.addEventListener('click', () => timeline?.resetZoom());
+}
+
+function updateZoomReadout(range) {
+  const label = $('#timeline-zoom-range');
+  const btn = $('#timeline-reset-zoom');
+  if (!label || !btn) return;
+  if (!range) {
+    label.hidden = true;
+    btn.hidden = true;
+    return;
+  }
+  const fmt = (ms) => fmtTime(new Date(ms).toISOString());
+  label.textContent = `${fmt(range.startMs)} → ${fmt(range.endMs)}`;
+  label.hidden = false;
+  btn.hidden = false;
 }
 
 function onTimelinePick(item) {
@@ -3310,6 +3434,7 @@ async function init() {
   timeline = new TimelineView($('#timeline'));
   timeline.onCursorChange = applyAsOfCursor;
   timeline.onPickItem = onTimelinePick;
+  timeline.onZoomChange = updateZoomReadout;
   bindTimelineReset();
   bindStatsCollapse();
   bindSectionCollapse('.streams', '.streams__head', 'observatory.streams.expanded.v1', true);
