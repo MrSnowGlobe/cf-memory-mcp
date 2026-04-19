@@ -137,25 +137,45 @@ function rebuildGraphFromState() {
   const relations = [...snapshot.relations];
 
   if (state.showFacts) {
-    const seedAround = (parent) => ({
-      _seedX: parent ? parent.x + (Math.random() - 0.5) * 80 : undefined,
-      _seedY: parent ? parent.y + (Math.random() - 0.5) * 80 : undefined,
-    });
+    // Seed diamonds on a ring around their parent so they don't all
+    // pile on top and then shove each other apart when the bloom hits.
+    const seedOnRing = (parent, index, total) => {
+      if (!parent) return {};
+      const angle = (index / Math.max(1, total)) * Math.PI * 2;
+      const d = 48 + Math.random() * 18;
+      return {
+        _seedX: parent.x + Math.cos(angle) * d,
+        _seedY: parent.y + Math.sin(angle) * d,
+      };
+    };
 
     for (const [entityId, entityFacts] of state.factIndex?.byEntity ?? []) {
       const parent = graph?.byId?.get(entityId);
+      let i = 0;
       for (const f of entityFacts) {
-        entities.push({ ...buildFactNode(f), __bloomsFrom: entityId, ...seedAround(parent) });
+        entities.push({
+          ...buildFactNode(f),
+          __bloomsFrom: entityId,
+          ...seedOnRing(parent, i, entityFacts.length),
+        });
         relations.push(buildFactEdge(f, entityId));
+        i++;
       }
     }
     for (const f of state.factIndex?.unanchored ?? []) {
       entities.push({ ...buildFactNode(f), __bloomsFrom: '__unanchored__' });
     }
     const youNode = graph?.byId?.get(SELF_NODE_ID);
-    for (const p of state.preferences ?? []) {
-      entities.push({ ...buildPrefNode(p), __bloomsFrom: SELF_NODE_ID, ...seedAround(youNode) });
+    const prefList = state.preferences ?? [];
+    let pi = 0;
+    for (const p of prefList) {
+      entities.push({
+        ...buildPrefNode(p),
+        __bloomsFrom: SELF_NODE_ID,
+        ...seedOnRing(youNode, pi, prefList.length),
+      });
       relations.push(buildPrefEdge(p));
+      pi++;
     }
   }
 
@@ -472,7 +492,10 @@ class GraphView {
 
   setSelected(id) {
     this.selectedId = id;
-    this.alpha = Math.max(this.alpha, 0.4);
+    // Small re-heat so the fresh bloom settles over a few frames — the
+    // diamonds are already ring-seeded near their parent, so a large
+    // kick would swing everything unnecessarily.
+    this.alpha = Math.max(this.alpha, 0.2);
   }
 
   setShowFacts(on) {
@@ -580,6 +603,23 @@ class GraphView {
     const { ctx } = this;
     ctx.clearRect(0, 0, this.width, this.height);
 
+    const now = performance.now();
+    const FADE_MS = 380;
+    // Track per-node visibility epoch so newly-visible nodes (and
+    // their edges) ease in from opacity 0 instead of popping.
+    for (const n of this.nodes) {
+      const vis = this._isVisible(n);
+      if (vis) {
+        if (n._visibleSinceT == null) n._visibleSinceT = now;
+      } else {
+        n._visibleSinceT = null;
+      }
+    }
+    const fadeOf = (n) => {
+      if (n._visibleSinceT == null) return 0;
+      return Math.min(1, (now - n._visibleSinceT) / FADE_MS);
+    };
+
     const visible = this.nodes.filter((n) => this._isVisible(n));
     const hasHover = !!this.hoverNode;
     const hasSelected = !!this.selectedId;
@@ -589,6 +629,8 @@ class GraphView {
     // Edges
     for (const e of this.edges) {
       if (!this._isVisible(e.a) || !this._isVisible(e.b)) continue;
+      const edgeFade = Math.min(fadeOf(e.a), fadeOf(e.b));
+      ctx.globalAlpha = edgeFade;
       const isFocused = focusId && (e.a.id === focusId || e.b.id === focusId);
       const dimmed = focusId && !isFocused;
       ctx.beginPath();
@@ -621,8 +663,12 @@ class GraphView {
       }
     }
 
+    ctx.globalAlpha = 1;
+
     // Nodes
     for (const n of visible) {
+      const fade = fadeOf(n);
+      ctx.globalAlpha = fade;
       const r = this._radius(n);
       const isHover = this.hoverNode === n;
       const isSelected = this.selectedId === n.id;
@@ -708,6 +754,8 @@ class GraphView {
         ctx.fillText(text, tx, ty - 1);
       }
     }
+
+    ctx.globalAlpha = 1;
   }
 
   _neighbourSet(id) {
