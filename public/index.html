@@ -376,6 +376,28 @@
       <div class="tool-stats__body" id="tool-stats-body"></div>
     </section>
 
+    <!-- ============================================================ -->
+    <!-- Timeline — per-tier dots on a shared time axis with scrubber  -->
+    <!-- ============================================================ -->
+    <section class="timeline" aria-label="Memory timeline">
+      <header class="timeline__head">
+        <h2>Timeline</h2>
+        <div class="timeline__legend" aria-hidden="true">
+          <span class="timeline__legend-item" data-tier="long"><span class="timeline__swatch"></span>long-term</span>
+          <span class="timeline__legend-item" data-tier="short"><span class="timeline__swatch"></span>short-term</span>
+          <span class="timeline__legend-item" data-tier="proc"><span class="timeline__swatch"></span>procedural</span>
+        </div>
+        <div class="timeline__cursor-readout">
+          <span class="timeline__cursor-label" id="timeline-cursor-label">now</span>
+          <button type="button" id="timeline-reset" class="timeline__reset" hidden>reset</button>
+        </div>
+      </header>
+      <div class="timeline__frame">
+        <canvas id="timeline" width="1200" height="90"></canvas>
+        <div class="timeline__tooltip" id="timeline-tooltip" hidden></div>
+      </div>
+    </section>
+
     </div><!-- /.view--observatory -->
 
     <!-- ============================================================ -->

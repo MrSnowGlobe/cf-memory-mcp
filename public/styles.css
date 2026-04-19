@@ -2085,6 +2085,115 @@ input[type="range"]::-moz-range-thumb {
 .tool-stats__rate--fail { color: var(--failure); }
 
 /* ============================================================
+   Timeline — dots per tier on a shared time axis with scrubber
+   ============================================================ */
+
+.timeline {
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: calc(var(--u) * 2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--u);
+}
+.timeline__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 2);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: var(--u);
+}
+.timeline__head h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  color: var(--ink);
+  margin: 0;
+}
+.timeline__legend {
+  display: flex;
+  gap: calc(var(--u) * 2);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.timeline__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.timeline__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.timeline__legend-item[data-tier="long"]  .timeline__swatch { background: var(--long); }
+.timeline__legend-item[data-tier="short"] .timeline__swatch { background: var(--short); }
+.timeline__legend-item[data-tier="proc"]  .timeline__swatch { background: var(--proc); }
+.timeline__cursor-readout {
+  display: flex;
+  align-items: center;
+  gap: var(--u);
+}
+.timeline__cursor-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.timeline__cursor-label[data-scrubbing="true"] { color: var(--long); }
+.timeline__reset {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.timeline__reset:hover { color: var(--long); border-color: var(--long); }
+
+.timeline__frame {
+  position: relative;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--bg);
+}
+.timeline__frame canvas {
+  display: block;
+  width: 100%;
+  height: 90px;
+  cursor: crosshair;
+}
+
+.timeline__tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--inset);
+  border: 1px solid var(--rule-warm);
+  border-radius: var(--r);
+  padding: 5px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, calc(-100% - 8px));
+  z-index: 10;
+}
+.timeline__tooltip strong { color: var(--long); font-weight: 500; }
+
+/* ============================================================
    Trace inspector overlay
    ============================================================ */
 
