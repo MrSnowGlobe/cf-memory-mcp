@@ -2299,6 +2299,15 @@ input[type="range"]::-moz-range-thumb {
   letter-spacing: 0.04em;
 }
 .timeline__cursor-label[data-scrubbing="true"] { color: var(--long); }
+.timeline__zoom-range {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--long);
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border: 1px solid var(--long);
+  border-radius: 1px;
+}
 .timeline__reset {
   background: transparent;
   border: 1px solid var(--rule);
