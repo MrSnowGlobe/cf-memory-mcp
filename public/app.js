@@ -525,12 +525,6 @@ class GraphView {
   }
 
   _step() {
-    // Higher cutoff + stronger damping than the stock defaults so the
-    // graph settles quickly after a bloom. With the old values a single
-    // re-heat kept things drifting for several seconds, which read as
-    // jarring motion under the selected node.
-    if (this.alpha < 0.06) return;
-
     const nodes = this.nodes.filter((n) => this._isVisible(n));
     if (!nodes.length) return;
 
@@ -538,7 +532,11 @@ class GraphView {
     const LINK_DIST = 100;
     const LINK_K = 0.06;
     const CENTER_K = 0.008;
-    const FRICTION = 0.74;
+    const FRICTION = 0.78;
+    // Brownian noise — scaled so there's always a faint ambient drift
+    // even when alpha floors, giving the graph a sense of life without
+    // the larger post-bloom swings.
+    const NOISE = 0.9;
 
     // Repulsion (O(n²); fine for our scale)
     for (let i = 0; i < nodes.length; i++) {
@@ -578,9 +576,11 @@ class GraphView {
       n.vy += (cy - n.y) * CENTER_K;
     }
 
-    // Integrate
+    // Integrate (with ambient jitter so equilibrium isn't dead-still).
     for (const n of nodes) {
       if (n === this.dragNode) continue;
+      n.vx += (Math.random() - 0.5) * NOISE;
+      n.vy += (Math.random() - 0.5) * NOISE;
       n.vx *= FRICTION;
       n.vy *= FRICTION;
       n.x += n.vx * this.alpha;
@@ -594,7 +594,9 @@ class GraphView {
       if (n.y > this.height - margin){ n.y = this.height - margin; n.vy *= -0.3; }
     }
 
-    this.alpha *= 0.955;
+    // Decay toward a gentle floor so bloom kicks fade but ambient
+    // drift never completely stops.
+    this.alpha = Math.max(0.045, this.alpha * 0.955);
   }
 
   _radius(n) {
