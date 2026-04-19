@@ -126,21 +126,35 @@ function rebuildGraphFromState() {
   const snapshot = state.snapshot;
   if (!snapshot) return;
 
-  const entities = [buildSelfNode(), ...snapshot.entities];
+  // Decorate entities with a child count so the renderer can draw a
+  // small presence indicator without re-querying the fact index.
+  const selfCount = state.preferences?.length ?? 0;
+  const entities = [{ ...buildSelfNode(), __childCount: selfCount }];
+  for (const e of snapshot.entities) {
+    const count = state.factIndex?.byEntity.get(e.id)?.length ?? 0;
+    entities.push({ ...e, __childCount: count });
+  }
   const relations = [...snapshot.relations];
 
   if (state.showFacts) {
+    const seedAround = (parent) => ({
+      _seedX: parent ? parent.x + (Math.random() - 0.5) * 80 : undefined,
+      _seedY: parent ? parent.y + (Math.random() - 0.5) * 80 : undefined,
+    });
+
     for (const [entityId, entityFacts] of state.factIndex?.byEntity ?? []) {
+      const parent = graph?.byId?.get(entityId);
       for (const f of entityFacts) {
-        entities.push(buildFactNode(f));
+        entities.push({ ...buildFactNode(f), __bloomsFrom: entityId, ...seedAround(parent) });
         relations.push(buildFactEdge(f, entityId));
       }
     }
     for (const f of state.factIndex?.unanchored ?? []) {
-      entities.push(buildFactNode(f));
+      entities.push({ ...buildFactNode(f), __bloomsFrom: '__unanchored__' });
     }
+    const youNode = graph?.byId?.get(SELF_NODE_ID);
     for (const p of state.preferences ?? []) {
-      entities.push(buildPrefNode(p));
+      entities.push({ ...buildPrefNode(p), __bloomsFrom: SELF_NODE_ID, ...seedAround(youNode) });
       relations.push(buildPrefEdge(p));
     }
   }
@@ -423,8 +437,8 @@ class GraphView {
       const r = Math.min(this.width, this.height) * 0.32;
       return {
         ...e,
-        x: old?.x ?? cx + Math.cos(angle) * r * (0.6 + Math.random() * 0.4),
-        y: old?.y ?? cy + Math.sin(angle) * r * (0.6 + Math.random() * 0.4),
+        x: old?.x ?? e._seedX ?? cx + Math.cos(angle) * r * (0.6 + Math.random() * 0.4),
+        y: old?.y ?? e._seedY ?? cy + Math.sin(angle) * r * (0.6 + Math.random() * 0.4),
         vx: 0,
         vy: 0,
         degree: 0,
@@ -467,8 +481,25 @@ class GraphView {
   }
 
   _isVisible(n) {
+    // Diamond bloom gating: a fact/pref diamond only materialises when
+    // its bloom source is the current selection's anchor (or for
+    // unanchored facts, always).
+    if (n.__bloomsFrom !== undefined) {
+      if (n.__bloomsFrom === '__unanchored__') return true;
+      return n.__bloomsFrom === this._bloomAnchor();
+    }
     if (n.__synthetic) return true;
     return this.typeFilter.has(n.entity_type);
+  }
+
+  _bloomAnchor() {
+    if (!this.selectedId) return null;
+    const sel = this.byId.get(this.selectedId);
+    if (!sel) return null;
+    // If a diamond is selected, the bloom stays anchored to its parent
+    // entity — clicking a fact doesn't hide the other facts beside it.
+    if (sel.__bloomsFrom !== undefined) return sel.__bloomsFrom;
+    return sel.id;
   }
 
   _step() {
@@ -648,6 +679,17 @@ class GraphView {
         ctx.arc(n.x - r * 0.3, n.y - r * 0.3, r * 0.4, 0, Math.PI * 2);
         ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
         ctx.fill();
+
+        // Presence indicator — a small brass dot telling the user this
+        // entity has facts (or preferences for the You node). Hidden
+        // when the entity is already the bloom anchor, since its
+        // diamonds are already visible.
+        if (this.showFacts && n.__childCount > 0 && this._bloomAnchor() !== n.id) {
+          ctx.beginPath();
+          ctx.arc(n.x + r * 0.72, n.y - r * 0.72, 2.4, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(212, 165, 116, 0.85)';
+          ctx.fill();
+        }
       }
 
       // Label (only for hovered, selected, or large nodes).
