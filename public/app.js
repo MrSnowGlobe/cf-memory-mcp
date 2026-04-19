@@ -30,7 +30,187 @@ const TYPE_COLORS = {
   EVENT: '#A87C9F',
   ORGANIZATION: '#D4B574',
   CUSTOM: '#7DA8A4',
+  SELF: '#E8D8B0',
+  FACT: '#D4A574',
+  PREF: '#E8D8B0',
 };
+
+// The "You" graph node is a client-side synthetic — it does not exist
+// in D1, but anchors the preferences for the current (project, user)
+// scope so they live on the graph alongside everything else.
+const SELF_NODE_ID = '__you__';
+
+function buildSelfNode() {
+  return {
+    id: SELF_NODE_ID,
+    name: 'You',
+    entity_type: 'SELF',
+    subtype: null,
+    description: `Preferences for ${settings.userId} in ${settings.projectId}. Click to view.`,
+    project_id: settings.projectId,
+    user_id: settings.userId,
+    updated_at: new Date().toISOString(),
+    __synthetic: true,
+  };
+}
+
+function normalizeName(s) {
+  return (s ?? '').trim().toLowerCase();
+}
+
+// Synthetic diamond nodes representing facts and preferences on the
+// graph. Anchored facts get a thin edge to their subject entity;
+// unanchored facts float free. Preferences orbit the "You" node.
+function buildFactNode(fact) {
+  return {
+    id: `__fact__${fact.id}`,
+    name: fact.object ?? '',
+    entity_type: 'FACT',
+    subtype: null,
+    description: `${fact.subject} · ${fact.predicate} · ${fact.object}`,
+    project_id: fact.project_id,
+    user_id: fact.user_id,
+    updated_at: fact.created_at,
+    __synthetic: true,
+    __factNode: true,
+    __fact: fact,
+  };
+}
+
+function buildFactEdge(fact, subjectEntityId) {
+  return {
+    id: `__fact_edge__${fact.id}`,
+    source_entity_id: subjectEntityId,
+    target_entity_id: `__fact__${fact.id}`,
+    relation_type: fact.predicate,
+    relation_strength: 0.3,
+    __factEdge: true,
+  };
+}
+
+function buildPrefNode(pref) {
+  return {
+    id: `__pref__${pref.id}`,
+    name: pref.preference ?? '',
+    entity_type: 'PREF',
+    subtype: pref.category,
+    description: pref.preference + (pref.context ? `\n\n${pref.context}` : ''),
+    project_id: pref.project_id,
+    user_id: pref.user_id,
+    updated_at: pref.updated_at,
+    __synthetic: true,
+    __prefNode: true,
+    __pref: pref,
+  };
+}
+
+function buildPrefEdge(pref) {
+  return {
+    id: `__pref_edge__${pref.id}`,
+    source_entity_id: SELF_NODE_ID,
+    target_entity_id: `__pref__${pref.id}`,
+    relation_type: pref.category,
+    relation_strength: 0.3,
+    __prefEdge: true,
+  };
+}
+
+/**
+ * Recompute the full graph node + edge lists from the current state
+ * and push them to the GraphView. Called from refresh() after a load
+ * and from the overlay toggle — rebuilding is cheap compared to the
+ * perception cost of the sim re-settling, and keeps this as the one
+ * source of truth for what's on the canvas.
+ */
+function rebuildGraphFromState() {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+
+  // Decorate entities with a child count so the renderer can draw a
+  // small presence indicator without re-querying the fact index.
+  const selfCount = state.preferences?.length ?? 0;
+  const entities = [{ ...buildSelfNode(), __childCount: selfCount }];
+  for (const e of snapshot.entities) {
+    const count = state.factIndex?.byEntity.get(e.id)?.length ?? 0;
+    entities.push({ ...e, __childCount: count });
+  }
+  const relations = [...snapshot.relations];
+
+  if (state.showFacts) {
+    // Seed diamonds on a ring around their parent so they don't all
+    // pile on top and then shove each other apart when the bloom hits.
+    const seedOnRing = (parent, index, total) => {
+      if (!parent) return {};
+      const angle = (index / Math.max(1, total)) * Math.PI * 2;
+      const d = 48 + Math.random() * 18;
+      return {
+        _seedX: parent.x + Math.cos(angle) * d,
+        _seedY: parent.y + Math.sin(angle) * d,
+      };
+    };
+
+    for (const [entityId, entityFacts] of state.factIndex?.byEntity ?? []) {
+      const parent = graph?.byId?.get(entityId);
+      let i = 0;
+      for (const f of entityFacts) {
+        entities.push({
+          ...buildFactNode(f),
+          __bloomsFrom: entityId,
+          ...seedOnRing(parent, i, entityFacts.length),
+        });
+        relations.push(buildFactEdge(f, entityId));
+        i++;
+      }
+    }
+    for (const f of state.factIndex?.unanchored ?? []) {
+      entities.push({ ...buildFactNode(f), __bloomsFrom: '__unanchored__' });
+    }
+    const youNode = graph?.byId?.get(SELF_NODE_ID);
+    const prefList = state.preferences ?? [];
+    let pi = 0;
+    for (const p of prefList) {
+      entities.push({
+        ...buildPrefNode(p),
+        __bloomsFrom: SELF_NODE_ID,
+        ...seedOnRing(youNode, pi, prefList.length),
+      });
+      relations.push(buildPrefEdge(p));
+      pi++;
+    }
+  }
+
+  graph.setData(entities, relations);
+  graph.alpha = 1;
+}
+
+/**
+ * Group facts by the entity their `subject` refers to. Subjects are
+ * free text in the schema, so we match them to entity names with an
+ * exact case-normalized comparison — a fuzzy pass could be added later
+ * if the unanchored rate turns out high.
+ *
+ * Returns { byEntity, unanchored } where byEntity is a Map keyed by
+ * entity.id and unanchored holds facts we couldn't place.
+ */
+function buildFactIndex(facts, entities) {
+  const byName = new Map();
+  for (const e of entities) {
+    if (e.__synthetic) continue;
+    byName.set(normalizeName(e.name), e.id);
+  }
+  const byEntity = new Map();
+  const unanchored = [];
+  for (const f of facts ?? []) {
+    const hit = byName.get(normalizeName(f.subject));
+    if (hit) {
+      if (!byEntity.has(hit)) byEntity.set(hit, []);
+      byEntity.get(hit).push(f);
+    } else {
+      unanchored.push(f);
+    }
+  }
+  return { byEntity, unanchored };
+}
 
 function loadSettings() {
   try {
@@ -242,6 +422,7 @@ class GraphView {
     this.dragOffset = [0, 0];
     this.typeFilter = new Set(ENTITY_TYPES);
     this.searchHighlight = new Set();
+    this.showFacts = false;
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
@@ -276,8 +457,8 @@ class GraphView {
       const r = Math.min(this.width, this.height) * 0.32;
       return {
         ...e,
-        x: old?.x ?? cx + Math.cos(angle) * r * (0.6 + Math.random() * 0.4),
-        y: old?.y ?? cy + Math.sin(angle) * r * (0.6 + Math.random() * 0.4),
+        x: old?.x ?? e._seedX ?? cx + Math.cos(angle) * r * (0.6 + Math.random() * 0.4),
+        y: old?.y ?? e._seedY ?? cy + Math.sin(angle) * r * (0.6 + Math.random() * 0.4),
         vx: 0,
         vy: 0,
         degree: 0,
@@ -311,16 +492,39 @@ class GraphView {
 
   setSelected(id) {
     this.selectedId = id;
-    this.alpha = Math.max(this.alpha, 0.4);
+    // Tiny re-heat — the diamonds are ring-seeded near their parent so
+    // the sim really only needs a gentle push to settle.
+    this.alpha = Math.max(this.alpha, 0.14);
+  }
+
+  setShowFacts(on) {
+    this.showFacts = !!on;
+    this.alpha = Math.max(this.alpha, 0.12);
   }
 
   _isVisible(n) {
+    // Diamond bloom gating: a fact/pref diamond only materialises when
+    // its bloom source is the current selection's anchor (or for
+    // unanchored facts, always).
+    if (n.__bloomsFrom !== undefined) {
+      if (n.__bloomsFrom === '__unanchored__') return true;
+      return n.__bloomsFrom === this._bloomAnchor();
+    }
+    if (n.__synthetic) return true;
     return this.typeFilter.has(n.entity_type);
   }
 
-  _step() {
-    if (this.alpha < 0.02) return;
+  _bloomAnchor() {
+    if (!this.selectedId) return null;
+    const sel = this.byId.get(this.selectedId);
+    if (!sel) return null;
+    // If a diamond is selected, the bloom stays anchored to its parent
+    // entity — clicking a fact doesn't hide the other facts beside it.
+    if (sel.__bloomsFrom !== undefined) return sel.__bloomsFrom;
+    return sel.id;
+  }
 
+  _step() {
     const nodes = this.nodes.filter((n) => this._isVisible(n));
     if (!nodes.length) return;
 
@@ -328,7 +532,11 @@ class GraphView {
     const LINK_DIST = 100;
     const LINK_K = 0.06;
     const CENTER_K = 0.008;
-    const FRICTION = 0.84;
+    const FRICTION = 0.78;
+    // Brownian noise — scaled so there's always a faint ambient drift
+    // even when alpha floors, giving the graph a sense of life without
+    // the larger post-bloom swings.
+    const NOISE = 0.9;
 
     // Repulsion (O(n²); fine for our scale)
     for (let i = 0; i < nodes.length; i++) {
@@ -368,9 +576,11 @@ class GraphView {
       n.vy += (cy - n.y) * CENTER_K;
     }
 
-    // Integrate
+    // Integrate (with ambient jitter so equilibrium isn't dead-still).
     for (const n of nodes) {
       if (n === this.dragNode) continue;
+      n.vx += (Math.random() - 0.5) * NOISE;
+      n.vy += (Math.random() - 0.5) * NOISE;
       n.vx *= FRICTION;
       n.vy *= FRICTION;
       n.x += n.vx * this.alpha;
@@ -384,16 +594,36 @@ class GraphView {
       if (n.y > this.height - margin){ n.y = this.height - margin; n.vy *= -0.3; }
     }
 
-    this.alpha *= 0.992;
+    // Decay toward a gentle floor so bloom kicks fade but ambient
+    // drift never completely stops.
+    this.alpha = Math.max(0.045, this.alpha * 0.955);
   }
 
   _radius(n) {
+    if (n.__factNode || n.__prefNode) return 4;
     return 5 + Math.min(12, Math.sqrt(n.degree) * 2.5);
   }
 
   _draw() {
     const { ctx } = this;
     ctx.clearRect(0, 0, this.width, this.height);
+
+    const now = performance.now();
+    const FADE_MS = 380;
+    // Track per-node visibility epoch so newly-visible nodes (and
+    // their edges) ease in from opacity 0 instead of popping.
+    for (const n of this.nodes) {
+      const vis = this._isVisible(n);
+      if (vis) {
+        if (n._visibleSinceT == null) n._visibleSinceT = now;
+      } else {
+        n._visibleSinceT = null;
+      }
+    }
+    const fadeOf = (n) => {
+      if (n._visibleSinceT == null) return 0;
+      return Math.min(1, (now - n._visibleSinceT) / FADE_MS);
+    };
 
     const visible = this.nodes.filter((n) => this._isVisible(n));
     const hasHover = !!this.hoverNode;
@@ -404,6 +634,8 @@ class GraphView {
     // Edges
     for (const e of this.edges) {
       if (!this._isVisible(e.a) || !this._isVisible(e.b)) continue;
+      const edgeFade = Math.min(fadeOf(e.a), fadeOf(e.b));
+      ctx.globalAlpha = edgeFade;
       const isFocused = focusId && (e.a.id === focusId || e.b.id === focusId);
       const dimmed = focusId && !isFocused;
       ctx.beginPath();
@@ -436,14 +668,19 @@ class GraphView {
       }
     }
 
+    ctx.globalAlpha = 1;
+
     // Nodes
     for (const n of visible) {
+      const fade = fadeOf(n);
+      ctx.globalAlpha = fade;
       const r = this._radius(n);
       const isHover = this.hoverNode === n;
       const isSelected = this.selectedId === n.id;
       const isHighlighted = this.searchHighlight.has(n.id);
       const dimmed = focusId && focusId !== n.id && focusedNeighbours && !focusedNeighbours.has(n.id);
       const color = TYPE_COLORS[n.entity_type] || '#8B8170';
+      const isDiamond = !!(n.__factNode || n.__prefNode);
 
       // Halo for selected / hovered / highlighted
       if (isSelected || isHover || isHighlighted) {
@@ -453,29 +690,64 @@ class GraphView {
         ctx.fill();
       }
 
-      // Outer ring (subtle)
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
-      ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+      if (isDiamond) {
+        // Diamond (rotated square) for fact and preference nodes.
+        const rr = r + 1.5;
+        ctx.beginPath();
+        ctx.moveTo(n.x, n.y - rr);
+        ctx.lineTo(n.x + rr, n.y);
+        ctx.lineTo(n.x, n.y + rr);
+        ctx.lineTo(n.x - rr, n.y);
+        ctx.closePath();
+        ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
 
-      // Body
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = dimmed ? this._dim(color) : color;
-      ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(n.x, n.y - r);
+        ctx.lineTo(n.x + r, n.y);
+        ctx.lineTo(n.x, n.y + r);
+        ctx.lineTo(n.x - r, n.y);
+        ctx.closePath();
+        ctx.fillStyle = dimmed ? this._dim(color) : color;
+        ctx.fill();
+      } else {
+        // Outer ring (subtle)
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = dimmed ? 'rgba(60, 56, 46, 0.4)' : 'rgba(14, 17, 18, 0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
 
-      // Inner highlight
-      ctx.beginPath();
-      ctx.arc(n.x - r * 0.3, n.y - r * 0.3, r * 0.4, 0, Math.PI * 2);
-      ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
-      ctx.fill();
+        // Body
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = dimmed ? this._dim(color) : color;
+        ctx.fill();
 
-      // Label (only for hovered, selected, or large nodes)
-      if (isHover || isSelected || (n.degree >= 3 && !focusId)) {
+        // Inner highlight
+        ctx.beginPath();
+        ctx.arc(n.x - r * 0.3, n.y - r * 0.3, r * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = dimmed ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.12)';
+        ctx.fill();
+
+        // Presence indicator — a small brass dot telling the user this
+        // entity has facts (or preferences for the You node). Hidden
+        // when the entity is already the bloom anchor, since its
+        // diamonds are already visible.
+        if (this.showFacts && n.__childCount > 0 && this._bloomAnchor() !== n.id) {
+          ctx.beginPath();
+          ctx.arc(n.x + r * 0.72, n.y - r * 0.72, 2.4, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(212, 165, 116, 0.85)';
+          ctx.fill();
+        }
+      }
+
+      // Label (only for hovered, selected, or large nodes).
+      if (isHover || isSelected || (!isDiamond && n.degree >= 3 && !focusId)) {
         ctx.font = `italic 12px "Fraunces", "Cormorant Garamond", serif`;
-        const text = n.name;
+        const raw = n.name || '';
+        const text = raw.length > 48 ? raw.slice(0, 47) + '…' : raw;
         const tw = ctx.measureText(text).width;
         const tx = n.x;
         const ty = n.y + r + 14;
@@ -487,6 +759,8 @@ class GraphView {
         ctx.fillText(text, tx, ty - 1);
       }
     }
+
+    ctx.globalAlpha = 1;
   }
 
   _neighbourSet(id) {
@@ -546,14 +820,11 @@ class GraphView {
       }
 
       const hit = this._hitTest(x, y);
-      const prevHoverNode = this.hoverNode;
-      const prevHoverEdge = this.hoverEdge;
       this.hoverNode = hit?.kind === 'node' ? hit.node : null;
       this.hoverEdge = hit?.kind === 'edge' ? hit.edge : null;
-
-      if (this.hoverNode || this.hoverEdge !== prevHoverEdge || prevHoverNode !== this.hoverNode) {
-        this.alpha = Math.max(this.alpha, 0.15);
-      }
+      // Hover doesn't change graph structure; the rAF loop redraws
+      // every frame regardless of alpha, so there's no need to
+      // re-heat the sim on mousemove.
 
       // Tooltip
       if (this.hoverNode) {
@@ -597,6 +868,8 @@ class GraphView {
       const hit = this._hitTest(x, y);
       if (hit?.kind === 'node' && this.onSelect) {
         this.onSelect(hit.node);
+      } else if (!hit && this.onDeselect) {
+        this.onDeselect();
       }
     });
   }
@@ -629,6 +902,10 @@ const state = {
   typeCounts: {},
   enabledTypes: new Set(ENTITY_TYPES),
   traversal: { depth: 2, direction: 'both' },
+  preferences: [],
+  facts: [],
+  factIndex: { byEntity: new Map(), unanchored: [] },
+  showFacts: false,
 };
 
 let graph;
@@ -782,10 +1059,32 @@ function renderTraces(traces) {
 
 // ----- Detail panel ---------------------------------------------------------
 
+function deselectEntity() {
+  graph.setSelected(null);
+  graph.alpha = Math.max(graph.alpha, 0.1);
+  renderDetailPlaceholder();
+}
+
 async function selectEntity(node) {
   graph.setSelected(node.id);
   const detail = $('#detail');
   detail.innerHTML = '';
+
+  // Synthetic diamond nodes — not in D1, bypass the relations/traverse
+  // fetch and render their row directly.
+  if (node.__factNode) {
+    renderFactDetail(detail, node.__fact);
+    return;
+  }
+  if (node.__prefNode) {
+    renderPrefDetail(detail, node.__pref);
+    return;
+  }
+  if (node.__synthetic && node.entity_type === 'SELF') {
+    renderSelfDetail(detail, node);
+    return;
+  }
+
   const card = el('div', { class: 'detail-card' });
 
   const color = TYPE_COLORS[node.entity_type] || '#8B8170';
@@ -846,6 +1145,10 @@ async function selectEntity(node) {
   const neighList = el('ul', { class: 'neighbour-list' });
   neighSection.append(neighList);
   card.append(neighSection);
+
+  // Facts whose subject name matches this entity, grouped client-side.
+  const matchedFacts = state.factIndex?.byEntity.get(node.id) ?? [];
+  card.append(renderEntityFactsSection(matchedFacts));
 
   detail.append(card);
 
@@ -991,6 +1294,19 @@ function bindSearch() {
 
 // ----- Traversal controls ---------------------------------------------------
 
+function bindFactsToggle() {
+  const btn = $('#toggle-facts');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const next = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', String(next));
+    btn.textContent = next ? 'on' : 'off';
+    state.showFacts = next;
+    graph.setShowFacts(next);
+    rebuildGraphFromState();
+  });
+}
+
 function bindTraversal() {
   const depth = $('#traverse-depth');
   const depthVal = $('#traverse-depth-value');
@@ -1013,77 +1329,10 @@ function bindTraversal() {
 }
 
 // ----- Long-term records (preferences + facts) ------------------------------
+//
+// Facts attach to their subject entity; preferences attach to the
+// synthetic "You" node. The old standalone records section is gone.
 
-function renderRecordsView(preferences, facts) {
-  state.preferences = preferences;
-  state.facts = facts;
-  applyRecordsFilter('prefs');
-  applyRecordsFilter('facts');
-}
-
-/**
- * Re-render either the preferences or facts list, applying the current
- * search filter. Called on initial render AND on every keystroke in the
- * search input — cheap because we only ever paint visible cards.
- */
-function applyRecordsFilter(which) {
-  const isPref = which === 'prefs';
-  const all = isPref ? state.preferences ?? [] : state.facts ?? [];
-  const list = $(isPref ? '#records-prefs' : '#records-facts');
-  const countNode = $(isPref ? '#records-prefs-count' : '#records-facts-count');
-  const input = $(isPref ? '#search-prefs' : '#search-facts');
-  const query = input?.value ?? '';
-
-  const matched = all.filter((row) => matchesQuery(query, isPref ? prefSearchText(row) : factSearchText(row)));
-
-  list.innerHTML = '';
-
-  if (query) {
-    countNode.dataset.filtered = 'true';
-    countNode.dataset.shown = String(matched.length);
-    countNode.dataset.total = String(all.length);
-    countNode.textContent = '';
-  } else {
-    delete countNode.dataset.filtered;
-    countNode.textContent = String(all.length);
-  }
-
-  if (!all.length) {
-    list.append(emptyScopeCard(isPref ? 'preferences' : 'facts'));
-    return;
-  }
-
-  if (!matched.length) {
-    list.append(
-      el('li', { class: 'records__empty' }, [
-        el('p', { style: 'margin: 0;' }, [
-          'Nothing matches ',
-          el('code', { style: 'color: var(--hot); font-style: normal;' }, query),
-          '.',
-        ]),
-      ])
-    );
-    return;
-  }
-
-  for (const row of matched) {
-    list.append(isPref ? renderPreferenceCard(row) : renderFactCard(row));
-  }
-}
-
-function prefSearchText(p) {
-  return [p.category, p.preference, p.context ?? ''].join(' ').toLowerCase();
-}
-
-function factSearchText(f) {
-  return [f.subject, f.predicate, f.object, f.source ?? ''].join(' ').toLowerCase();
-}
-
-/**
- * Multi-token "fuzzy" filter: every whitespace-split token of the query
- * must appear as a case-insensitive substring somewhere in the haystack.
- * Empty query matches everything.
- */
 function matchesQuery(query, haystack) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -1091,15 +1340,114 @@ function matchesQuery(query, haystack) {
   return tokens.every((t) => haystack.includes(t));
 }
 
-function bindRecordsSearch() {
-  const debounce = (fn, ms) => {
-    let t;
-    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-  };
-  const onPrefs = debounce(() => applyRecordsFilter('prefs'), 100);
-  const onFacts = debounce(() => applyRecordsFilter('facts'), 100);
-  $('#search-prefs')?.addEventListener('input', onPrefs);
-  $('#search-facts')?.addEventListener('input', onFacts);
+/**
+ * Render the detail panel for the synthetic "You" node — lists the
+ * current scope's preferences in the same visual slot that a real
+ * entity's relations/facts would occupy.
+ */
+function renderSelfDetail(detail, node) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.SELF}` }, 'SELF'),
+    ])
+  );
+  card.append(el('h2', { class: 'detail-card__name' }, 'You'));
+
+  const meta = el('dl', { class: 'detail-card__meta' });
+  meta.append(el('dt', {}, 'project'));
+  meta.append(el('dd', {}, node.project_id));
+  meta.append(el('dt', {}, 'user'));
+  meta.append(el('dd', {}, node.user_id));
+  card.append(meta);
+  card.append(el('p', { class: 'detail-card__desc' }, node.description));
+
+  const prefs = state.preferences ?? [];
+  const section = el('section', { class: 'detail-section' });
+  section.append(el('h4', { class: 'detail-section__title' }, [
+    'Preferences',
+    el('span', { class: 'count' }, String(prefs.length)),
+  ]));
+  if (!prefs.length) {
+    section.append(el('p', { class: 'detail-section__empty' }, 'No preferences in this scope yet.'));
+  } else {
+    const list = el('ul', { class: 'detail-section__list' });
+    for (const p of prefs) list.append(renderPreferenceCard(p));
+    section.append(list);
+  }
+  card.append(section);
+  detail.append(card);
+}
+
+/**
+ * Detail panel for a fact diamond — wraps the existing fact card
+ * renderer in a detail-card shell so the layout matches entity panels.
+ */
+function renderFactDetail(detail, fact) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.FACT}` }, 'FACT'),
+    ])
+  );
+  const list = el('ul', { class: 'detail-section__list' });
+  list.append(renderFactCard(fact));
+  card.append(list);
+  detail.append(card);
+}
+
+/**
+ * Detail panel for a preference diamond.
+ */
+function renderPrefDetail(detail, pref) {
+  const card = el('div', { class: 'detail-card' });
+  card.append(
+    el('div', { class: 'detail-card__head' }, [
+      el('div', { class: 'detail-card__type', style: `--type: ${TYPE_COLORS.PREF}` }, 'PREF'),
+    ])
+  );
+  const list = el('ul', { class: 'detail-section__list' });
+  list.append(renderPreferenceCard(pref));
+  card.append(list);
+  detail.append(card);
+}
+
+/**
+ * Build the "Facts" detail section for a real entity. Shows a short
+ * empty line rather than being omitted so the user sees "no facts
+ * yet" on entities they care about.
+ */
+function renderEntityFactsSection(facts) {
+  const section = el('section', { class: 'detail-section' });
+  section.append(el('h4', { class: 'detail-section__title' }, [
+    'Facts',
+    el('span', { class: 'count' }, String(facts.length)),
+  ]));
+  if (!facts.length) {
+    section.append(el('p', { class: 'detail-section__empty' }, 'No facts mention this entity by name.'));
+    return section;
+  }
+  const list = el('ul', { class: 'detail-section__list' });
+  for (const f of facts) list.append(renderFactCard(f));
+  section.append(list);
+  return section;
+}
+
+/**
+ * Populate the detail panel's idle state (nothing selected). Keeps the
+ * original "pick a node" hint. Unanchored facts now render as free-
+ * floating diamonds on the graph when the chip overlay toggle is on,
+ * so the drawer that used to live here is gone.
+ */
+function renderDetailPlaceholder() {
+  const detail = $('#detail');
+  detail.innerHTML = '';
+  detail.append(
+    el('div', { class: 'detail__placeholder' }, [
+      el('p', { class: 'detail__placeholder-line' }, 'No selection.'),
+      el('p', { class: 'detail__placeholder-sub' }, 'Pick a node from the chart. Toggle "chips on graph" to surface facts and preferences as diamonds.'),
+    ])
+  );
 }
 
 function emptyStreamCard(thing) {
@@ -2069,12 +2417,36 @@ async function onGlobalHitClick(kind, row) {
     } catch (err) {
       showToast(`Failed to load entity: ${err.message}`);
     }
-  } else if (kind === 'traces') {
-    openTraceInspector(row.id);
-  } else {
-    // Facts, prefs, messages: toast the id so the user can act on it.
-    showToast(`${kind} ${row.id.slice(0, 8)}… (open the list below to inspect)`, 'info');
+    return;
   }
+  if (kind === 'traces') {
+    openTraceInspector(row.id);
+    return;
+  }
+  if (kind === 'facts') {
+    const fact = (state.facts || []).find((f) => f.id === row.id);
+    if (fact) {
+      const detail = $('#detail');
+      detail.innerHTML = '';
+      renderFactDetail(detail, fact);
+    } else {
+      showToast(`Fact ${row.id.slice(0, 8)}… not in current scope`, 'info');
+    }
+    return;
+  }
+  if (kind === 'preferences') {
+    const pref = (state.preferences || []).find((p) => p.id === row.id);
+    if (pref) {
+      const detail = $('#detail');
+      detail.innerHTML = '';
+      renderPrefDetail(detail, pref);
+    } else {
+      showToast(`Preference ${row.id.slice(0, 8)}… not in current scope`, 'info');
+    }
+    return;
+  }
+  // Messages: no dedicated surface yet — toast so the id is copyable.
+  showToast(`${kind} ${row.id.slice(0, 8)}…`, 'info');
 }
 
 function closeGlobalSearchDropdown() {
@@ -2254,7 +2626,7 @@ async function doPromote(type, id, reason, target, form) {
 function moveSelection(delta) {
   // Alphabetical order among currently-visible entities so j/k is predictable.
   const visible = graph.nodes
-    .filter((n) => graph.typeFilter.has(n.entity_type))
+    .filter((n) => n.__synthetic || graph.typeFilter.has(n.entity_type))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name));
   if (!visible.length) return;
@@ -2292,13 +2664,17 @@ async function refresh(opts = {}) {
     renderStats(snapshot.stats);
     renderTypeFilters();
 
-    graph.setData(snapshot.entities, snapshot.relations);
+    state.preferences = preferences;
+    state.facts = facts;
+    state.factIndex = buildFactIndex(facts, snapshot.entities);
+
+    rebuildGraphFromState();
     $('#empty-graph').hidden = snapshot.entities.length > 0;
 
     renderMessages(snapshot.recent_messages);
     renderTraces(snapshot.recent_traces);
-    renderRecordsView(preferences, facts);
     renderToolStats(toolStats);
+    renderDetailPlaceholder();
 
     setStatus('ok', 'connected');
   } catch (err) {
@@ -2313,11 +2689,12 @@ async function refresh(opts = {}) {
 async function init() {
   graph = new GraphView($('#graph'));
   graph.onSelect = selectEntity;
+  graph.onDeselect = deselectEntity;
   bindSettings();
   bindSearch();
   bindTraversal();
+  bindFactsToggle();
   bindViewSwitch();
-  bindRecordsSearch();
   bindLogin();
   bindGlobalSearch();
   bindTraceInspector();
@@ -2370,6 +2747,8 @@ async function init() {
         closeTraceInspector();
       } else if (!$('#global-search-dropdown').hidden) {
         closeGlobalSearchDropdown();
+      } else if (graph.selectedId) {
+        deselectEntity();
       } else {
         $('#drawer').hidden = true;
         $('#settings-toggle').setAttribute('aria-expanded', 'false');

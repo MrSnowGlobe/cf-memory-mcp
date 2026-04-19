@@ -291,6 +291,20 @@
           </div>
         </div>
 
+        <div class="rail__section">
+          <h3 class="rail__title">Overlays</h3>
+          <div class="control">
+            <label for="toggle-facts">chips on graph</label>
+            <button
+              type="button"
+              id="toggle-facts"
+              class="toggle"
+              aria-pressed="false"
+              title="Show fact & preference chips on entity nodes"
+            >off</button>
+          </div>
+        </div>
+
         <div class="rail__section rail__section--quiet">
           <p class="footnote">
             <span class="footnote__lede">Click a node</span> to reveal its 1–3 hop neighbourhood. Hover an edge for its relation type.
@@ -360,45 +374,6 @@
         <span class="tool-stats__count" id="tool-stats-count">0</span>
       </header>
       <div class="tool-stats__body" id="tool-stats-body"></div>
-    </section>
-
-    <!-- Long-term records (preferences + facts), inline below streams -->
-    <section class="records" aria-label="Long-term records">
-      <div class="records__column">
-        <header class="records__head">
-          <h2>Preferences</h2>
-          <span class="records__count" id="records-prefs-count">0</span>
-        </header>
-        <div class="records__search">
-          <input
-            type="search"
-            id="search-prefs"
-            placeholder="filter preferences…"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label="Filter preferences"
-          />
-        </div>
-        <ul class="records__list" id="records-prefs"></ul>
-      </div>
-
-      <div class="records__column">
-        <header class="records__head">
-          <h2>Facts</h2>
-          <span class="records__count" id="records-facts-count">0</span>
-        </header>
-        <div class="records__search">
-          <input
-            type="search"
-            id="search-facts"
-            placeholder="filter facts…"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label="Filter facts"
-          />
-        </div>
-        <ul class="records__list" id="records-facts"></ul>
-      </div>
     </section>
 
     </div><!-- /.view--observatory -->
