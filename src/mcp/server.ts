@@ -16,6 +16,8 @@ import {
   AddFactSchema,
   StartTraceSchema,
   CompleteTraceSchema,
+  AddStepSchema,
+  RecordToolCallSchema,
   PromoteRequestSchema,
   ContextRequestSchema,
   AddRelationSchema,
@@ -251,6 +253,39 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
     },
   },
   {
+    name: 'memory_add_step',
+    description:
+      'Append a reasoning step to an open trace. Each step captures a thought/action/observation triple and is auto-numbered. Call after memory_start_trace and before memory_complete_trace. Required context for memory_record_tool_call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        trace_id: { type: 'string', description: 'Trace ID returned by memory_start_trace.' },
+        thought: { type: 'string', description: 'What the agent is reasoning about.' },
+        action: { type: 'string', description: 'What the agent decided to do.' },
+        observation: { type: 'string', description: 'What the agent observed after acting.' },
+      },
+      required: ['trace_id'],
+    },
+  },
+  {
+    name: 'memory_record_tool_call',
+    description:
+      'Attach a tool call to an existing step. Captures tool_name, arguments, result, status (success/failure/timeout), and duration_ms. Also upserts into tool_stats, so the Observatory tool-instruments panel fills in as calls accumulate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        step_id: { type: 'string', description: 'Step ID returned by memory_add_step.' },
+        tool_name: { type: 'string', description: 'Name of the tool that was called.' },
+        arguments: { type: 'object', description: 'Arguments passed to the tool (any JSON-serialisable object).' },
+        result: { description: 'The return value from the tool (any JSON-serialisable value).' },
+        status: { type: 'string', enum: ['success', 'failure', 'timeout'] },
+        duration_ms: { type: 'number', description: 'How long the call took in milliseconds.' },
+        message_id: { type: 'string', description: 'Optional message id the call was triggered by.' },
+      },
+      required: ['step_id', 'tool_name', 'status'],
+    },
+  },
+  {
     name: 'memory_traverse',
     description:
       'Walk the knowledge graph outward from a root entity. Returns each reachable entity once with its minimum hop distance. Use when semantic search is not enough and you need entities connected by specific relations.',
@@ -315,6 +350,14 @@ const CreateSessionMcpSchema = z.object({
 
 const CompleteTraceMcpSchema = CompleteTraceSchema.extend({
   id: z.string().min(1).max(500),
+});
+
+const AddStepMcpSchema = AddStepSchema.extend({
+  trace_id: z.string().min(1).max(500),
+});
+
+const RecordToolCallMcpSchema = RecordToolCallSchema.extend({
+  step_id: z.string().min(1).max(500),
 });
 
 function parseArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): T {
@@ -435,6 +478,27 @@ async function dispatchToolCall(
       const parsed = parseArgs(CreateSessionMcpSchema, args);
       const id = parsed.id ?? generateId();
       return stm(env, projectId, userId).createSession(id, parsed.metadata);
+    }
+
+    case 'memory_add_step': {
+      const parsed = parseArgs(AddStepMcpSchema, args);
+      return pm(env, projectId, userId).addStep(parsed.trace_id, {
+        thought: parsed.thought,
+        action: parsed.action,
+        observation: parsed.observation,
+      });
+    }
+
+    case 'memory_record_tool_call': {
+      const parsed = parseArgs(RecordToolCallMcpSchema, args);
+      return pm(env, projectId, userId).recordToolCall(parsed.step_id, {
+        tool_name: parsed.tool_name,
+        arguments: parsed.arguments ?? {},
+        result: parsed.result,
+        status: parsed.status,
+        duration_ms: parsed.duration_ms,
+        message_id: parsed.message_id,
+      });
     }
 
     case 'memory_promote_to_global': {

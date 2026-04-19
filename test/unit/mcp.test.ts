@@ -102,6 +102,15 @@ describe('MCP server', () => {
       expect(names).toContain('memory_create_session');
       expect(names).toContain('memory_complete_trace');
     });
+
+    it('includes memory_add_step and memory_record_tool_call', async () => {
+      const res = await mcpCall(testEnv, 'tools/list');
+      if ('error' in res) throw new Error(res.error.message);
+      const tools = (res.result as unknown as { tools: Array<{ name: string }> }).tools;
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('memory_add_step');
+      expect(names).toContain('memory_record_tool_call');
+    });
   });
 
   describe('memory_add_relation', () => {
@@ -260,6 +269,64 @@ describe('MCP server', () => {
       const res = await mcpCall(testEnv, 'tools/call', {
         name: 'memory_complete_trace',
         arguments: { id: 'does-not-exist', outcome: 'n/a', success: false },
+      });
+      expect('error' in res).toBe(true);
+    });
+  });
+
+  describe('memory_add_step + memory_record_tool_call', () => {
+    it('appends a step to an open trace and records a tool call that upserts tool_stats', async () => {
+      const pm = new ProceduralMemory(testEnv, PROJECT_ID, USER_ID);
+      const trace = await pm.startTrace({ task: 'plan a deploy' });
+
+      const stepRes = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_add_step',
+        arguments: {
+          trace_id: trace.id,
+          thought: 'pick a window',
+          action: 'check the calendar',
+          observation: 'tuesday 2pm is clear',
+        },
+      });
+      const step = extractResult<{ id: string; trace_id: string; step_number: number }>(stepRes);
+      expect(step.trace_id).toBe(trace.id);
+      expect(step.step_number).toBe(1);
+
+      const callRes = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_record_tool_call',
+        arguments: {
+          step_id: step.id,
+          tool_name: 'check_calendar',
+          arguments: { date: '2026-04-21' },
+          result: { available: true },
+          status: 'success',
+          duration_ms: 47,
+        },
+      });
+      const call = extractResult<{ id: string; tool_name: string; status: string }>(callRes);
+      expect(call.tool_name).toBe('check_calendar');
+      expect(call.status).toBe('success');
+
+      // tool_stats should now have the entry
+      const stats = await pm.getToolStats();
+      const entry = stats.find((s) => s.tool_name === 'check_calendar');
+      expect(entry).toBeTruthy();
+      expect(entry?.total_calls).toBe(1);
+      expect(entry?.success_count).toBe(1);
+    });
+
+    it('rejects an add_step against a non-existent trace with -32602 or NotFound', async () => {
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_add_step',
+        arguments: { trace_id: 'missing', thought: 'whatever' },
+      });
+      expect('error' in res).toBe(true);
+    });
+
+    it('rejects record_tool_call against a non-existent step', async () => {
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_record_tool_call',
+        arguments: { step_id: 'missing', tool_name: 't', status: 'success' },
       });
       expect('error' in res).toBe(true);
     });
