@@ -1580,11 +1580,12 @@ function renderStreamsForAsOf() {
 
 function renderMessages(messages) {
   const list = $('#stream-messages');
-  $('#stream-messages-count').textContent = messages.length;
+  const total = messages.length;
+  $('#stream-messages-count').textContent = total;
   const summary = $('#streams-msg-summary');
-  if (summary) summary.textContent = `${messages.length} message${messages.length === 1 ? '' : 's'}`;
+  if (summary) summary.textContent = `${total} message${total === 1 ? '' : 's'}`;
   list.innerHTML = '';
-  if (!messages.length) {
+  if (!total) {
     list.append(emptyStreamCard('messages'));
     return;
   }
@@ -1601,11 +1602,12 @@ function renderMessages(messages) {
 
 function renderTraces(traces) {
   const list = $('#stream-traces');
-  $('#stream-traces-count').textContent = traces.length;
+  const total = traces.length;
+  $('#stream-traces-count').textContent = total;
   const summary = $('#streams-trace-summary');
-  if (summary) summary.textContent = `${traces.length} trace${traces.length === 1 ? '' : 's'}`;
+  if (summary) summary.textContent = `${total} trace${total === 1 ? '' : 's'}`;
   list.innerHTML = '';
-  if (!traces.length) {
+  if (!total) {
     list.append(emptyStreamCard('traces'));
     return;
   }
@@ -3379,6 +3381,34 @@ function updateCursorReadout() {
   }
 }
 
+function bindActivitySize() {
+  const overlay = $('#activity-overlay');
+  const btn = $('#activity-overlay-size');
+  if (!overlay || !btn) return;
+  const key = 'observatory.activity.size.v1';
+  const saved = (() => {
+    try { return localStorage.getItem(key); } catch { return null; }
+  })();
+  overlay.dataset.size = saved === 'large' ? 'large' : 'small';
+  btn.textContent = overlay.dataset.size === 'large' ? '⇲' : '⇱';
+
+  const toggle = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = overlay.dataset.size === 'large' ? 'small' : 'large';
+    overlay.dataset.size = next;
+    btn.textContent = next === 'large' ? '⇲' : '⇱';
+    try { localStorage.setItem(key, next); } catch {}
+    // Re-render with new limits so the row count matches the size.
+    renderStreamsForAsOf();
+  };
+
+  btn.addEventListener('click', toggle);
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') toggle(e);
+  });
+}
+
 function bindTimelineReset() {
   const btn = $('#timeline-reset');
   if (btn) btn.addEventListener('click', resetAsOfCursor);
@@ -3437,7 +3467,8 @@ async function init() {
   timeline.onZoomChange = updateZoomReadout;
   bindTimelineReset();
   bindStatsCollapse();
-  bindSectionCollapse('.streams', '.streams__head', 'observatory.streams.expanded.v1', true);
+  bindSectionCollapse('#activity-overlay', '.activity-overlay__head', 'observatory.activity.expanded.v1', true);
+  bindActivitySize();
   bindSectionCollapse('.tool-stats', '.tool-stats__head', 'observatory.toolstats.expanded.v1', false);
   bindSettings();
   bindTraversal();

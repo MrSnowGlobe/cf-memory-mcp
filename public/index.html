@@ -318,6 +318,47 @@
           </div>
           <div class="chart__legend" id="hover-legend" hidden></div>
         </div>
+
+        <!-- Activity overlay — floats over the graph bottom-left. -->
+        <aside class="activity-overlay" id="activity-overlay" aria-expanded="true" data-size="small">
+          <button type="button" class="activity-overlay__head">
+            <span class="activity-overlay__title">Activity</span>
+            <span class="activity-overlay__summary">
+              <span class="activity-overlay__dot" data-tier="short"></span>
+              <span id="streams-msg-summary">0 messages</span>
+              <span class="activity-overlay__sep">·</span>
+              <span class="activity-overlay__dot" data-tier="proc"></span>
+              <span id="streams-trace-summary">0 traces</span>
+            </span>
+            <span
+              class="activity-overlay__size"
+              id="activity-overlay-size"
+              role="button"
+              tabindex="0"
+              aria-label="Toggle activity card size"
+              title="Toggle size (S/L)"
+            >⇱</span>
+            <span class="activity-overlay__caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="activity-overlay__body">
+            <div class="activity-overlay__group" data-tier="short">
+              <span class="activity-overlay__label">
+                <span class="activity-overlay__dot" data-tier="short"></span>
+                messages
+                <span class="activity-overlay__count" id="stream-messages-count">0</span>
+              </span>
+              <ol class="activity-overlay__list" id="stream-messages"></ol>
+            </div>
+            <div class="activity-overlay__group" data-tier="proc">
+              <span class="activity-overlay__label">
+                <span class="activity-overlay__dot" data-tier="proc"></span>
+                traces
+                <span class="activity-overlay__count" id="stream-traces-count">0</span>
+              </span>
+              <ol class="activity-overlay__list" id="stream-traces"></ol>
+            </div>
+          </div>
+        </aside>
       </section>
 
       <!-- RIGHT — Detail panel -->
@@ -352,49 +393,6 @@
       <div class="timeline__frame">
         <canvas id="timeline" width="1200" height="90"></canvas>
         <div class="timeline__tooltip" id="timeline-tooltip" hidden></div>
-      </div>
-    </section>
-
-    <!-- ============================================================ -->
-    <!-- Bottom strips: messages + traces                              -->
-    <!-- ============================================================ -->
-    <section class="streams" aria-label="Recent activity" aria-expanded="true">
-      <button type="button" class="streams__head">
-        <h2>Activity</h2>
-        <span class="streams__summary">
-          <span class="streams__summary-item">
-            <span class="streams__dot" data-tier="short"></span>
-            <span id="streams-msg-summary">0 messages</span>
-          </span>
-          <span class="streams__summary-item">
-            <span class="streams__dot" data-tier="proc"></span>
-            <span id="streams-trace-summary">0 traces</span>
-          </span>
-        </span>
-        <span class="streams__caret" aria-hidden="true">▾</span>
-      </button>
-      <div class="streams__body">
-        <article class="stream stream--short" data-tier="short">
-          <header class="stream__head">
-            <h3>
-              <span class="stream__tier">short&#8209;term</span>
-              messages
-            </h3>
-            <span class="stream__count" id="stream-messages-count">0</span>
-          </header>
-          <ol class="stream__body" id="stream-messages"></ol>
-        </article>
-
-        <article class="stream stream--proc" data-tier="proc">
-          <header class="stream__head">
-            <h3>
-              <span class="stream__tier">procedural</span>
-              traces
-            </h3>
-            <span class="stream__count" id="stream-traces-count">0</span>
-          </header>
-          <ol class="stream__body" id="stream-traces"></ol>
-        </article>
       </div>
     </section>
 
