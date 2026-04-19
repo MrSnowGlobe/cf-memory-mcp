@@ -2317,12 +2317,36 @@ async function onGlobalHitClick(kind, row) {
     } catch (err) {
       showToast(`Failed to load entity: ${err.message}`);
     }
-  } else if (kind === 'traces') {
-    openTraceInspector(row.id);
-  } else {
-    // Facts, prefs, messages: toast the id so the user can act on it.
-    showToast(`${kind} ${row.id.slice(0, 8)}… (open the list below to inspect)`, 'info');
+    return;
   }
+  if (kind === 'traces') {
+    openTraceInspector(row.id);
+    return;
+  }
+  if (kind === 'facts') {
+    const fact = (state.facts || []).find((f) => f.id === row.id);
+    if (fact) {
+      const detail = $('#detail');
+      detail.innerHTML = '';
+      renderFactDetail(detail, fact);
+    } else {
+      showToast(`Fact ${row.id.slice(0, 8)}… not in current scope`, 'info');
+    }
+    return;
+  }
+  if (kind === 'preferences') {
+    const pref = (state.preferences || []).find((p) => p.id === row.id);
+    if (pref) {
+      const detail = $('#detail');
+      detail.innerHTML = '';
+      renderPrefDetail(detail, pref);
+    } else {
+      showToast(`Preference ${row.id.slice(0, 8)}… not in current scope`, 'info');
+    }
+    return;
+  }
+  // Messages: no dedicated surface yet — toast so the id is copyable.
+  showToast(`${kind} ${row.id.slice(0, 8)}…`, 'info');
 }
 
 function closeGlobalSearchDropdown() {
