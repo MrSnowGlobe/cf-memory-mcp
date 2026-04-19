@@ -206,7 +206,7 @@
         <div class="rail__section">
           <h3 class="rail__title">Counts</h3>
           <div class="rail-stats">
-            <article class="stat stat--long" data-tier="long" aria-expanded="true">
+            <article class="stat stat--long" data-tier="long" aria-expanded="false">
               <button type="button" class="stat__head">
                 <span class="stat__tier">long&#8209;term</span>
                 <span class="stat__caret" aria-hidden="true">▾</span>
@@ -231,7 +231,7 @@
               </div>
             </article>
 
-            <article class="stat stat--short" data-tier="short" aria-expanded="true">
+            <article class="stat stat--short" data-tier="short" aria-expanded="false">
               <button type="button" class="stat__head">
                 <span class="stat__tier">short&#8209;term</span>
                 <span class="stat__caret" aria-hidden="true">▾</span>
@@ -248,7 +248,7 @@
               </div>
             </article>
 
-            <article class="stat stat--proc" data-tier="proc" aria-expanded="true">
+            <article class="stat stat--proc" data-tier="proc" aria-expanded="false">
               <button type="button" class="stat__head">
                 <span class="stat__tier">procedural</span>
                 <span class="stat__caret" aria-hidden="true">▾</span>
@@ -356,39 +356,56 @@
     <!-- ============================================================ -->
     <!-- Bottom strips: messages + traces                              -->
     <!-- ============================================================ -->
-    <section class="streams" aria-label="Recent activity">
-      <article class="stream stream--short" data-tier="short">
-        <header class="stream__head">
-          <h3>
-            <span class="stream__tier">short&#8209;term</span>
-            messages
-          </h3>
-          <span class="stream__count" id="stream-messages-count">0</span>
-        </header>
-        <ol class="stream__body" id="stream-messages"></ol>
-      </article>
+    <section class="streams" aria-label="Recent activity" aria-expanded="true">
+      <button type="button" class="streams__head">
+        <h2>Activity</h2>
+        <span class="streams__summary">
+          <span class="streams__summary-item">
+            <span class="streams__dot" data-tier="short"></span>
+            <span id="streams-msg-summary">0 messages</span>
+          </span>
+          <span class="streams__summary-item">
+            <span class="streams__dot" data-tier="proc"></span>
+            <span id="streams-trace-summary">0 traces</span>
+          </span>
+        </span>
+        <span class="streams__caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="streams__body">
+        <article class="stream stream--short" data-tier="short">
+          <header class="stream__head">
+            <h3>
+              <span class="stream__tier">short&#8209;term</span>
+              messages
+            </h3>
+            <span class="stream__count" id="stream-messages-count">0</span>
+          </header>
+          <ol class="stream__body" id="stream-messages"></ol>
+        </article>
 
-      <article class="stream stream--proc" data-tier="proc">
-        <header class="stream__head">
-          <h3>
-            <span class="stream__tier">procedural</span>
-            traces
-          </h3>
-          <span class="stream__count" id="stream-traces-count">0</span>
-        </header>
-        <ol class="stream__body" id="stream-traces"></ol>
-      </article>
+        <article class="stream stream--proc" data-tier="proc">
+          <header class="stream__head">
+            <h3>
+              <span class="stream__tier">procedural</span>
+              traces
+            </h3>
+            <span class="stream__count" id="stream-traces-count">0</span>
+          </header>
+          <ol class="stream__body" id="stream-traces"></ol>
+        </article>
+      </div>
     </section>
 
     <!-- Procedural — tool instruments (aggregated tool_stats) -->
-    <section class="tool-stats" aria-label="Tool instruments">
-      <header class="tool-stats__head">
+    <section class="tool-stats" aria-label="Tool instruments" aria-expanded="false">
+      <button type="button" class="tool-stats__head">
         <h2>
           <span class="tool-stats__tier">procedural</span>
           tool&nbsp;instruments
         </h2>
         <span class="tool-stats__count" id="tool-stats-count">0</span>
-      </header>
+        <span class="tool-stats__caret" aria-hidden="true">▾</span>
+      </button>
       <div class="tool-stats__body" id="tool-stats-body"></div>
     </section>
 
