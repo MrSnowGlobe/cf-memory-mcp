@@ -320,7 +320,7 @@
         </div>
 
         <!-- Activity overlay — floats over the graph bottom-left. -->
-        <aside class="activity-overlay" id="activity-overlay" aria-expanded="true">
+        <aside class="activity-overlay" id="activity-overlay" aria-expanded="true" data-size="small">
           <button type="button" class="activity-overlay__head">
             <span class="activity-overlay__title">Activity</span>
             <span class="activity-overlay__summary">
@@ -330,6 +330,14 @@
               <span class="activity-overlay__dot" data-tier="proc"></span>
               <span id="streams-trace-summary">0 traces</span>
             </span>
+            <span
+              class="activity-overlay__size"
+              id="activity-overlay-size"
+              role="button"
+              tabindex="0"
+              aria-label="Toggle activity card size"
+              title="Toggle size (S/L)"
+            >⇱</span>
             <span class="activity-overlay__caret" aria-hidden="true">▾</span>
           </button>
           <div class="activity-overlay__body">

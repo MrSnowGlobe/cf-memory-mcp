@@ -1578,8 +1578,10 @@ function renderStreamsForAsOf() {
   renderTraces((state.traces ?? []).filter(passesTrace));
 }
 
-const ACTIVITY_OVERLAY_MSG_LIMIT = 4;
-const ACTIVITY_OVERLAY_TRACE_LIMIT = 3;
+function activityLimits() {
+  const size = $('#activity-overlay')?.dataset.size ?? 'small';
+  return size === 'large' ? { msg: 10, trace: 6 } : { msg: 4, trace: 3 };
+}
 
 function renderMessages(messages) {
   const list = $('#stream-messages');
@@ -1592,7 +1594,7 @@ function renderMessages(messages) {
     list.append(emptyStreamCard('messages'));
     return;
   }
-  const shown = messages.slice(0, ACTIVITY_OVERLAY_MSG_LIMIT);
+  const shown = messages.slice(0, activityLimits().msg);
   for (const m of shown) {
     list.append(
       el('li', { class: 'message' + freshClass(m.id) }, [
@@ -1615,7 +1617,7 @@ function renderTraces(traces) {
     list.append(emptyStreamCard('traces'));
     return;
   }
-  const shown = traces.slice(0, ACTIVITY_OVERLAY_TRACE_LIMIT);
+  const shown = traces.slice(0, activityLimits().trace);
   for (const t of shown) {
     const successKey = t.success === 1 ? '1' : t.success === 0 ? '0' : '-';
     list.append(
@@ -3386,6 +3388,34 @@ function updateCursorReadout() {
   }
 }
 
+function bindActivitySize() {
+  const overlay = $('#activity-overlay');
+  const btn = $('#activity-overlay-size');
+  if (!overlay || !btn) return;
+  const key = 'observatory.activity.size.v1';
+  const saved = (() => {
+    try { return localStorage.getItem(key); } catch { return null; }
+  })();
+  overlay.dataset.size = saved === 'large' ? 'large' : 'small';
+  btn.textContent = overlay.dataset.size === 'large' ? '⇲' : '⇱';
+
+  const toggle = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = overlay.dataset.size === 'large' ? 'small' : 'large';
+    overlay.dataset.size = next;
+    btn.textContent = next === 'large' ? '⇲' : '⇱';
+    try { localStorage.setItem(key, next); } catch {}
+    // Re-render with new limits so the row count matches the size.
+    renderStreamsForAsOf();
+  };
+
+  btn.addEventListener('click', toggle);
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') toggle(e);
+  });
+}
+
 function bindTimelineReset() {
   const btn = $('#timeline-reset');
   if (btn) btn.addEventListener('click', resetAsOfCursor);
@@ -3445,6 +3475,7 @@ async function init() {
   bindTimelineReset();
   bindStatsCollapse();
   bindSectionCollapse('#activity-overlay', '.activity-overlay__head', 'observatory.activity.expanded.v1', true);
+  bindActivitySize();
   bindSectionCollapse('.tool-stats', '.tool-stats__head', 'observatory.toolstats.expanded.v1', false);
   bindSettings();
   bindTraversal();

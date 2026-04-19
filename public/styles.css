@@ -1180,6 +1180,19 @@ input[type="range"]::-moz-range-thumb {
 }
 .activity-overlay__dot[data-tier="short"] { background: var(--short); }
 .activity-overlay__dot[data-tier="proc"]  { background: var(--proc); }
+.activity-overlay__size {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  user-select: none;
+  transition: color 120ms ease, background 120ms ease;
+}
+.activity-overlay__size:hover { color: var(--long); background: rgba(212, 165, 116, 0.1); }
+.activity-overlay[data-size="large"] .activity-overlay__size { color: var(--long); }
 .activity-overlay__caret {
   font-size: 11px;
   color: var(--muted);
@@ -1189,6 +1202,42 @@ input[type="range"]::-moz-range-thumb {
 }
 .activity-overlay[aria-expanded="false"] .activity-overlay__caret { transform: rotate(-90deg); }
 .activity-overlay__head:hover .activity-overlay__caret { color: var(--long); }
+
+/* Large mode — wider card, show timestamps, looser content clamp. */
+.activity-overlay[data-size="large"] { width: 480px; }
+.activity-overlay[data-size="large"] .activity-overlay__body {
+  padding: 10px 14px 12px;
+  gap: 12px;
+}
+.activity-overlay[data-size="large"] .message {
+  grid-template-columns: 56px auto 1fr;
+  padding: 6px 8px;
+  gap: 10px;
+}
+.activity-overlay[data-size="large"] .message__time {
+  display: block;
+  font-size: 9px;
+  color: var(--dim);
+}
+.activity-overlay[data-size="large"] .message__role { font-size: 9px; padding: 2px 5px; }
+.activity-overlay[data-size="large"] .message__content {
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-line-clamp: 2;
+}
+.activity-overlay[data-size="large"] .trace {
+  grid-template-columns: 56px 10px 1fr auto;
+  padding: 6px 8px;
+  gap: 8px;
+  font-size: 12px;
+}
+.activity-overlay[data-size="large"] .trace__time {
+  display: block;
+  font-size: 9px;
+  color: var(--dim);
+}
+.activity-overlay[data-size="large"] .trace__task { font-size: 12px; }
+.activity-overlay[data-size="large"] .trace__duration { font-size: 10px; }
 
 .activity-overlay__body {
   padding: 8px 12px 10px;
