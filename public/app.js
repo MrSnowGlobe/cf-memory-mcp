@@ -1711,33 +1711,6 @@ function openEntityEdit(card, entity) {
   card.append(form);
 }
 
-// ----- Search ---------------------------------------------------------------
-
-let searchTimer = null;
-
-function bindSearch() {
-  const input = $('#search-input');
-  input.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    const q = input.value.trim();
-    if (!q) {
-      graph.setSearchHighlight([]);
-      return;
-    }
-    searchTimer = setTimeout(async () => {
-      try {
-        const results = await api('/api/v1/entities/search', {
-          method: 'POST',
-          body: JSON.stringify({ query: q, limit: 10 }),
-        });
-        graph.setSearchHighlight(results.map((r) => r.id));
-      } catch (err) {
-        showToast(`Search failed: ${err.message}`);
-      }
-    }, 250);
-  });
-}
-
 // ----- Traversal controls ---------------------------------------------------
 
 function bindFactsToggle() {
@@ -3317,7 +3290,6 @@ async function init() {
   bindTimelineReset();
   bindStatsCollapse();
   bindSettings();
-  bindSearch();
   bindTraversal();
   bindFactsToggle();
   bindViewSwitch();

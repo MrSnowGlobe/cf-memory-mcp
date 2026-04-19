@@ -477,19 +477,31 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
    Stats strip
    ============================================================ */
 
-.stats {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: calc(var(--u) * 2);
+.rail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--u);
 }
 
 .stat {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
   border: 1px solid var(--rule);
   border-radius: var(--r);
-  padding: calc(var(--u) * 2) calc(var(--u) * 2.5);
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
   position: relative;
   overflow: hidden;
+}
+
+/* Stat cards inside the left rail need slimmer rows so three of them
+   fit alongside the rest of the rail controls without overflowing. */
+.rail-stats .stat__row {
+  padding: 2px 0;
+}
+.rail-stats .stat__label {
+  font-size: 12px;
+}
+.rail-stats .stat__value {
+  font-size: 14px;
 }
 
 .stat::before {
@@ -571,8 +583,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
   gap: calc(var(--u) * 2);
-  min-height: 480px;
-  max-height: calc(100vh - 240px);
+  min-height: 500px;
+  max-height: calc(100vh - 120px);
 }
 
 .rail {

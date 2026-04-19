@@ -197,81 +197,69 @@
     <!-- ============================================================ -->
     <div class="view view--observatory" data-view-pane="observatory">
 
-    <!-- Stats strip -->
-    <section class="stats" aria-label="Memory tier counts">
-      <article class="stat stat--long" data-tier="long" aria-expanded="true">
-        <button type="button" class="stat__head">
-          <span class="stat__tier">long&#8209;term</span>
-          <span class="stat__caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="stat__body">
-          <div class="stat__row">
-            <span class="stat__label">entities</span>
-            <span class="stat__value" data-stat="entities">0</span>
-          </div>
-          <div class="stat__row">
-            <span class="stat__label">relations</span>
-            <span class="stat__value" data-stat="relations">0</span>
-          </div>
-          <div class="stat__row">
-            <span class="stat__label">facts</span>
-            <span class="stat__value" data-stat="facts">0</span>
-          </div>
-          <div class="stat__row">
-            <span class="stat__label">preferences</span>
-            <span class="stat__value" data-stat="preferences">0</span>
-          </div>
-        </div>
-      </article>
-
-      <article class="stat stat--short" data-tier="short" aria-expanded="true">
-        <button type="button" class="stat__head">
-          <span class="stat__tier">short&#8209;term</span>
-          <span class="stat__caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="stat__body">
-          <div class="stat__row">
-            <span class="stat__label">sessions</span>
-            <span class="stat__value" data-stat="sessions">0</span>
-          </div>
-          <div class="stat__row">
-            <span class="stat__label">messages</span>
-            <span class="stat__value" data-stat="messages">0</span>
-          </div>
-        </div>
-      </article>
-
-      <article class="stat stat--proc" data-tier="proc" aria-expanded="true">
-        <button type="button" class="stat__head">
-          <span class="stat__tier">procedural</span>
-          <span class="stat__caret" aria-hidden="true">▾</span>
-        </button>
-        <div class="stat__body">
-          <div class="stat__row">
-            <span class="stat__label">traces</span>
-            <span class="stat__value" data-stat="traces">0</span>
-          </div>
-        </div>
-      </article>
-    </section>
-
     <!-- ============================================================ -->
     <!-- Main composition: filters · graph · detail                    -->
     <!-- ============================================================ -->
     <main class="composition">
-      <!-- LEFT — Filters & search -->
+      <!-- LEFT — Filters & tier counts -->
       <aside class="rail rail--left" aria-label="Filters">
         <div class="rail__section">
-          <h3 class="rail__title">Search</h3>
-          <div class="search">
-            <input
-              type="search"
-              id="search-input"
-              placeholder="semantic search…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span class="search__hint">⌘K</span>
+          <h3 class="rail__title">Counts</h3>
+          <div class="rail-stats">
+            <article class="stat stat--long" data-tier="long" aria-expanded="true">
+              <button type="button" class="stat__head">
+                <span class="stat__tier">long&#8209;term</span>
+                <span class="stat__caret" aria-hidden="true">▾</span>
+              </button>
+              <div class="stat__body">
+                <div class="stat__row">
+                  <span class="stat__label">entities</span>
+                  <span class="stat__value" data-stat="entities">0</span>
+                </div>
+                <div class="stat__row">
+                  <span class="stat__label">relations</span>
+                  <span class="stat__value" data-stat="relations">0</span>
+                </div>
+                <div class="stat__row">
+                  <span class="stat__label">facts</span>
+                  <span class="stat__value" data-stat="facts">0</span>
+                </div>
+                <div class="stat__row">
+                  <span class="stat__label">preferences</span>
+                  <span class="stat__value" data-stat="preferences">0</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="stat stat--short" data-tier="short" aria-expanded="true">
+              <button type="button" class="stat__head">
+                <span class="stat__tier">short&#8209;term</span>
+                <span class="stat__caret" aria-hidden="true">▾</span>
+              </button>
+              <div class="stat__body">
+                <div class="stat__row">
+                  <span class="stat__label">sessions</span>
+                  <span class="stat__value" data-stat="sessions">0</span>
+                </div>
+                <div class="stat__row">
+                  <span class="stat__label">messages</span>
+                  <span class="stat__value" data-stat="messages">0</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="stat stat--proc" data-tier="proc" aria-expanded="true">
+              <button type="button" class="stat__head">
+                <span class="stat__tier">procedural</span>
+                <span class="stat__caret" aria-hidden="true">▾</span>
+              </button>
+              <div class="stat__body">
+                <div class="stat__row">
+                  <span class="stat__label">traces</span>
+                  <span class="stat__value" data-stat="traces">0</span>
+                </div>
+              </div>
+            </article>
           </div>
         </div>
 
