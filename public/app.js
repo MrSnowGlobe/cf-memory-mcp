@@ -1578,17 +1578,22 @@ function renderStreamsForAsOf() {
   renderTraces((state.traces ?? []).filter(passesTrace));
 }
 
+const ACTIVITY_OVERLAY_MSG_LIMIT = 4;
+const ACTIVITY_OVERLAY_TRACE_LIMIT = 3;
+
 function renderMessages(messages) {
   const list = $('#stream-messages');
-  $('#stream-messages-count').textContent = messages.length;
+  const total = messages.length;
+  $('#stream-messages-count').textContent = total;
   const summary = $('#streams-msg-summary');
-  if (summary) summary.textContent = `${messages.length} message${messages.length === 1 ? '' : 's'}`;
+  if (summary) summary.textContent = `${total} message${total === 1 ? '' : 's'}`;
   list.innerHTML = '';
-  if (!messages.length) {
+  if (!total) {
     list.append(emptyStreamCard('messages'));
     return;
   }
-  for (const m of messages) {
+  const shown = messages.slice(0, ACTIVITY_OVERLAY_MSG_LIMIT);
+  for (const m of shown) {
     list.append(
       el('li', { class: 'message' + freshClass(m.id) }, [
         el('span', { class: 'message__time' }, fmtTime(m.created_at)),
@@ -1601,15 +1606,17 @@ function renderMessages(messages) {
 
 function renderTraces(traces) {
   const list = $('#stream-traces');
-  $('#stream-traces-count').textContent = traces.length;
+  const total = traces.length;
+  $('#stream-traces-count').textContent = total;
   const summary = $('#streams-trace-summary');
-  if (summary) summary.textContent = `${traces.length} trace${traces.length === 1 ? '' : 's'}`;
+  if (summary) summary.textContent = `${total} trace${total === 1 ? '' : 's'}`;
   list.innerHTML = '';
-  if (!traces.length) {
+  if (!total) {
     list.append(emptyStreamCard('traces'));
     return;
   }
-  for (const t of traces) {
+  const shown = traces.slice(0, ACTIVITY_OVERLAY_TRACE_LIMIT);
+  for (const t of shown) {
     const successKey = t.success === 1 ? '1' : t.success === 0 ? '0' : '-';
     list.append(
       el('li', {
@@ -3437,7 +3444,7 @@ async function init() {
   timeline.onZoomChange = updateZoomReadout;
   bindTimelineReset();
   bindStatsCollapse();
-  bindSectionCollapse('.streams', '.streams__head', 'observatory.streams.expanded.v1', true);
+  bindSectionCollapse('#activity-overlay', '.activity-overlay__head', 'observatory.activity.expanded.v1', true);
   bindSectionCollapse('.tool-stats', '.tool-stats__head', 'observatory.toolstats.expanded.v1', false);
   bindSettings();
   bindTraversal();
