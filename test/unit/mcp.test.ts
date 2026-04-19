@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { env } from 'cloudflare:test';
 import app from '../../src/router';
 import { LongTermMemory } from '../../src/memory/long-term';
+import { ShortTermMemory } from '../../src/memory/short-term';
+import { ProceduralMemory } from '../../src/memory/procedural';
 import {
   applyMigrations,
   clearAllTables,
@@ -90,6 +92,15 @@ describe('MCP server', () => {
       const names = tools.map((t) => t.name);
       expect(names).toContain('memory_add_relation');
       expect(names).toContain('memory_traverse');
+    });
+
+    it('includes memory_create_session and memory_complete_trace', async () => {
+      const res = await mcpCall(testEnv, 'tools/list');
+      if ('error' in res) throw new Error(res.error.message);
+      const tools = (res.result as unknown as { tools: Array<{ name: string }> }).tools;
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('memory_create_session');
+      expect(names).toContain('memory_complete_trace');
     });
   });
 
@@ -187,6 +198,70 @@ describe('MCP server', () => {
 
       const neighbours = extractResult<Array<{ name: string }>>(res);
       expect(neighbours.map((n) => n.name)).toEqual(['Friend']);
+    });
+  });
+
+  describe('memory_create_session', () => {
+    it('creates a session with an explicit id and lets memory_add_message write to it', async () => {
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_create_session',
+        arguments: { id: 'my-session', metadata: { purpose: 'test' } },
+      });
+      const session = extractResult<{ id: string; project_id: string }>(res);
+      expect(session.id).toBe('my-session');
+      expect(session.project_id).toBe(PROJECT_ID);
+
+      const addRes = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_add_message',
+        arguments: { session_id: 'my-session', role: 'user', content: 'hello' },
+      });
+      const msg = extractResult<{ session_id: string; role: string }>(addRes);
+      expect(msg.session_id).toBe('my-session');
+      expect(msg.role).toBe('user');
+    });
+
+    it('generates an id when none is provided', async () => {
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_create_session',
+        arguments: {},
+      });
+      const session = extractResult<{ id: string }>(res);
+      expect(session.id).toMatch(/^[0-9a-f]{32}$/);
+
+      const stm = new ShortTermMemory(testEnv, PROJECT_ID, USER_ID);
+      const fetched = await stm.getSession(session.id);
+      expect(fetched?.id).toBe(session.id);
+    });
+  });
+
+  describe('memory_complete_trace', () => {
+    it('completes an open trace with outcome, success, and duration_ms', async () => {
+      const pm = new ProceduralMemory(testEnv, PROJECT_ID, USER_ID);
+      const trace = await pm.startTrace({ task: 'ship the thing' });
+
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_complete_trace',
+        arguments: { id: trace.id, outcome: 'shipped', success: true },
+      });
+      const completed = extractResult<{
+        id: string;
+        success: number;
+        outcome: string;
+        duration_ms: number | null;
+      }>(res);
+
+      expect(completed.id).toBe(trace.id);
+      expect(completed.outcome).toBe('shipped');
+      expect(completed.success).toBe(1);
+      expect(completed.duration_ms).not.toBeNull();
+    });
+
+    it('returns a JSON-RPC error when the trace id does not exist', async () => {
+      const res = await mcpCall(testEnv, 'tools/call', {
+        name: 'memory_complete_trace',
+        arguments: { id: 'does-not-exist', outcome: 'n/a', success: false },
+      });
+      expect('error' in res).toBe(true);
     });
   });
 });

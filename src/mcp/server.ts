@@ -15,6 +15,7 @@ import {
   AddPreferenceSchema,
   AddFactSchema,
   StartTraceSchema,
+  CompleteTraceSchema,
   PromoteRequestSchema,
   ContextRequestSchema,
   AddRelationSchema,
@@ -214,6 +215,42 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
     },
   },
   {
+    name: 'memory_create_session',
+    description:
+      'Create a short-term memory session to group messages. Call this before memory_add_message — a session must exist. If id is omitted a random id is generated and returned.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description:
+            'Optional session ID. Must be 1–500 chars. Omit to let the server generate one.',
+        },
+        metadata: { type: 'object', description: 'Optional metadata (purpose, caller, etc.).' },
+      },
+    },
+  },
+  {
+    name: 'memory_complete_trace',
+    description:
+      'Mark a reasoning trace as finished. Records the outcome text, success flag, and end timestamp so duration_ms is populated. Pairs with memory_start_trace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Trace ID returned by memory_start_trace.' },
+        outcome: {
+          type: 'string',
+          description: 'Short free-text summary of how the task ended (what was decided, found, or shipped).',
+        },
+        success: {
+          type: 'boolean',
+          description: 'true if the trace achieved its task, false otherwise.',
+        },
+      },
+      required: ['id', 'outcome', 'success'],
+    },
+  },
+  {
     name: 'memory_traverse',
     description:
       'Walk the knowledge graph outward from a root entity. Returns each reachable entity once with its minimum hop distance. Use when semantic search is not enough and you need entities connected by specific relations.',
@@ -267,6 +304,17 @@ const AddRelationMcpSchema = AddRelationSchema.extend({
 
 const TraverseMcpSchema = TraverseRelationsSchema.extend({
   entity_id: z.string().min(1).max(500),
+});
+
+// Session id is optional at the MCP boundary (we generate one when
+// absent), so we can't reuse CreateSessionSchema directly.
+const CreateSessionMcpSchema = z.object({
+  id: z.string().min(1).max(500).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const CompleteTraceMcpSchema = CompleteTraceSchema.extend({
+  id: z.string().min(1).max(500),
 });
 
 function parseArgs<T>(schema: z.ZodType<T>, args: Record<string, unknown>): T {
@@ -376,6 +424,17 @@ async function dispatchToolCall(
     case 'memory_start_trace': {
       const parsed = parseArgs(StartTraceSchema, args);
       return pm(env, projectId, userId).startTrace(parsed);
+    }
+
+    case 'memory_complete_trace': {
+      const parsed = parseArgs(CompleteTraceMcpSchema, args);
+      return pm(env, projectId, userId).completeTrace(parsed.id, parsed.outcome, parsed.success);
+    }
+
+    case 'memory_create_session': {
+      const parsed = parseArgs(CreateSessionMcpSchema, args);
+      const id = parsed.id ?? generateId();
+      return stm(env, projectId, userId).createSession(id, parsed.metadata);
     }
 
     case 'memory_promote_to_global': {
