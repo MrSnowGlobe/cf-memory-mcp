@@ -480,7 +480,22 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
 .rail-stats {
   display: flex;
   flex-direction: column;
-  gap: var(--u);
+  gap: 2px;
+}
+
+/* Rail stats drop the card chrome — tier header is a flush row that
+   aligns with the other rail section items. The popover keeps the
+   full card styling when expanded. */
+.rail-stats .stat {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+.rail-stats .stat::before { display: none; }
+.rail-stats .stat__head {
+  padding: 4px 0;
+  margin-bottom: 0;
 }
 
 .stat {
