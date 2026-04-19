@@ -5,6 +5,7 @@ export interface ProjectSummary {
   display_name: string | null;
   created_at: string;
   metadata: string;
+  archived: boolean;
   entities: number;
   sessions: number;
   traces: number;
@@ -47,7 +48,11 @@ interface MaxRow { key: string; m: string | null }
  * aggregate so each scan touches only its own table — D1 plans these
  * as straight index scans on the (project_id, ...) composite indexes.
  */
-export async function getAtlas(env: Bindings): Promise<Atlas> {
+export async function getAtlas(env: Bindings, opts: { includeArchived?: boolean } = {}): Promise<Atlas> {
+  const projectsSql = opts.includeArchived
+    ? `SELECT id, display_name, created_at, metadata, archived FROM projects ORDER BY created_at DESC`
+    : `SELECT id, display_name, created_at, metadata, archived FROM projects WHERE archived = 0 ORDER BY created_at DESC`;
+
   const [
     projectsRes,
     usersRes,
@@ -64,11 +69,12 @@ export async function getAtlas(env: Bindings): Promise<Atlas> {
     sessionActivity,
     traceActivity,
   ] = await Promise.all([
-    env.DB.prepare(`SELECT id, display_name, created_at, metadata FROM projects ORDER BY created_at DESC`).all<{
+    env.DB.prepare(projectsSql).all<{
       id: string;
       display_name: string | null;
       created_at: string;
       metadata: string;
+      archived: number;
     }>(),
     env.DB.prepare(`SELECT id, display_name, created_at, metadata FROM users ORDER BY created_at DESC`).all<{
       id: string;
@@ -144,6 +150,7 @@ export async function getAtlas(env: Bindings): Promise<Atlas> {
       display_name: p.display_name,
       created_at: p.created_at,
       metadata: p.metadata,
+      archived: p.archived === 1,
       entities: eByP.get(p.id) ?? 0,
       sessions: sByP.get(p.id) ?? 0,
       traces: tByP.get(p.id) ?? 0,

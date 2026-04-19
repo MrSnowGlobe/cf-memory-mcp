@@ -1304,7 +1304,87 @@ input[type="range"]::-moz-range-thumb {
   font-family: var(--serif);
   font-size: 13px;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u);
 }
+.atlas__toggle {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.atlas__action {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 4px 10px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.atlas__action:hover { color: var(--hot); border-color: var(--rule-warm); }
+.atlas__register {
+  display: flex;
+  gap: calc(var(--u) * 0.75);
+  padding: var(--u);
+  border: 1px dashed var(--rule);
+  border-radius: var(--r);
+  background: var(--bg-2);
+}
+.atlas__register input {
+  flex: 1 1 auto;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 6px 8px;
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.atlas__register button {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px 12px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.atlas__register button[type='submit']:hover { color: var(--hot); border-color: var(--rule-warm); }
+.card.is-archived { opacity: 0.55; border-left-color: var(--muted); }
+.card.is-archived .card__name::after {
+  content: ' · archived';
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.card__actions {
+  display: flex;
+  gap: calc(var(--u) * 0.75);
+  justify-content: flex-end;
+  margin-top: calc(var(--u) * -0.25);
+}
+.card__action {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 3px 8px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.card__action:hover { color: var(--hot); border-color: var(--rule-warm); }
 
 .cards {
   list-style: none;
