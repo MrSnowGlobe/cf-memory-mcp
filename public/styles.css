@@ -552,8 +552,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 320px;
   gap: calc(var(--u) * 2);
-  min-height: 540px;
-  max-height: calc(100vh - 220px);
+  min-height: 500px;
+  max-height: calc(100vh - 360px);
 }
 
 .rail {
