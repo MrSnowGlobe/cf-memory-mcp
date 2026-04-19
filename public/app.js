@@ -818,14 +818,11 @@ class GraphView {
       }
 
       const hit = this._hitTest(x, y);
-      const prevHoverNode = this.hoverNode;
-      const prevHoverEdge = this.hoverEdge;
       this.hoverNode = hit?.kind === 'node' ? hit.node : null;
       this.hoverEdge = hit?.kind === 'edge' ? hit.edge : null;
-
-      if (this.hoverNode || this.hoverEdge !== prevHoverEdge || prevHoverNode !== this.hoverNode) {
-        this.alpha = Math.max(this.alpha, 0.15);
-      }
+      // Hover doesn't change graph structure; the rAF loop redraws
+      // every frame regardless of alpha, so there's no need to
+      // re-heat the sim on mousemove.
 
       // Tooltip
       if (this.hoverNode) {
