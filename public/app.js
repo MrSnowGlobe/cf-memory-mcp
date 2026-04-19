@@ -818,6 +818,8 @@ class GraphView {
       const hit = this._hitTest(x, y);
       if (hit?.kind === 'node' && this.onSelect) {
         this.onSelect(hit.node);
+      } else if (!hit && this.onDeselect) {
+        this.onDeselect();
       }
     });
   }
@@ -1006,6 +1008,12 @@ function renderTraces(traces) {
 }
 
 // ----- Detail panel ---------------------------------------------------------
+
+function deselectEntity() {
+  graph.setSelected(null);
+  graph.alpha = Math.max(graph.alpha, 0.25);
+  renderDetailPlaceholder();
+}
 
 async function selectEntity(node) {
   graph.setSelected(node.id);
@@ -2631,6 +2639,7 @@ async function refresh(opts = {}) {
 async function init() {
   graph = new GraphView($('#graph'));
   graph.onSelect = selectEntity;
+  graph.onDeselect = deselectEntity;
   bindSettings();
   bindSearch();
   bindTraversal();
@@ -2688,6 +2697,8 @@ async function init() {
         closeTraceInspector();
       } else if (!$('#global-search-dropdown').hidden) {
         closeGlobalSearchDropdown();
+      } else if (graph.selectedId) {
+        deselectEntity();
       } else {
         $('#drawer').hidden = true;
         $('#settings-toggle').setAttribute('aria-expanded', 'false');
