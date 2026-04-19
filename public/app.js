@@ -245,6 +245,13 @@ class GraphView {
     this.dpr = window.devicePixelRatio || 1;
     this.fit();
     window.addEventListener('resize', () => this.fit());
+    // window.resize misses layout-driven resizes — e.g. the detail rail
+    // populating and pushing the chart row taller. Observe the canvas
+    // itself so the backing store re-fits on any container size change.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._resizeObserver = new ResizeObserver(() => this.fit());
+      this._resizeObserver.observe(this.canvas);
+    }
     this._wireEvents();
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
