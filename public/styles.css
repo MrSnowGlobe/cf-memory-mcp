@@ -489,11 +489,12 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   border-radius: var(--r);
   padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
   position: relative;
-  overflow: hidden;
 }
 
-/* Stat cards inside the left rail need slimmer rows so three of them
-   fit alongside the rest of the rail controls without overflowing. */
+/* Stat cards inside the left rail float their body out as a popover
+   when expanded, so they never push the rail (and therefore the
+   composition row) taller. */
+.rail-stats .stat { overflow: visible; }
 .rail-stats .stat__row {
   padding: 2px 0;
 }
@@ -502,6 +503,31 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
 }
 .rail-stats .stat__value {
   font-size: 14px;
+}
+.rail-stats .stat[aria-expanded="true"] .stat__body {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 0;
+  min-width: 180px;
+  padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--rule-warm);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-lg);
+  z-index: 40;
+}
+.rail-stats .stat[aria-expanded="true"] .stat__body::before {
+  /* Subtle arrow notch pointing back at the card */
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 14px;
+  width: 10px;
+  height: 10px;
+  background: inherit;
+  border-left: 1px solid var(--rule-warm);
+  border-bottom: 1px solid var(--rule-warm);
+  transform: rotate(45deg);
 }
 
 .stat::before {
@@ -598,6 +624,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   min-height: 0;
   overflow: hidden;
 }
+/* Left rail hosts stat popovers that need to escape the clip. */
+.rail--left { overflow: visible; }
 
 .rail__section { display: flex; flex-direction: column; gap: var(--u); min-height: 0; }
 .rail__section--quiet { margin-top: auto; padding-top: var(--u); border-top: 1px dashed var(--rule); }

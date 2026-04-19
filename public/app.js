@@ -1417,8 +1417,9 @@ function bindStatsCollapse() {
   const saved = loadStatsCollapse();
   for (const card of $$('.stat')) {
     const tier = card.dataset.tier;
-    // Default: expanded. Only collapse if the saved state explicitly says so.
-    const expanded = saved[tier] !== false;
+    // Default: collapsed. Rail stat bodies render as a popover when
+    // expanded, so starting closed keeps the rail short.
+    const expanded = saved[tier] === true;
     card.setAttribute('aria-expanded', String(expanded));
 
     const head = card.querySelector('.stat__head');
