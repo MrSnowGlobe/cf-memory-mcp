@@ -562,6 +562,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
 .stat__head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--u);
   margin-bottom: var(--u);
   width: 100%;
@@ -581,13 +582,13 @@ h1, h2, h3, h4 { margin: 0; font-weight: 400; }
   color: var(--tier-color, var(--muted));
 }
 .stat__caret {
-  flex: 1;
-  text-align: right;
+  flex: 0 0 auto;
   font-size: 11px;
   color: var(--muted);
   transition: transform 160ms ease;
   transform-origin: center;
   display: inline-block;
+  line-height: 1;
 }
 .stat[aria-expanded="false"] .stat__caret { transform: rotate(-90deg); }
 .stat[aria-expanded="false"] .stat__body { display: none; }
