@@ -492,15 +492,14 @@ class GraphView {
 
   setSelected(id) {
     this.selectedId = id;
-    // Small re-heat so the fresh bloom settles over a few frames — the
-    // diamonds are already ring-seeded near their parent, so a large
-    // kick would swing everything unnecessarily.
-    this.alpha = Math.max(this.alpha, 0.2);
+    // Tiny re-heat — the diamonds are ring-seeded near their parent so
+    // the sim really only needs a gentle push to settle.
+    this.alpha = Math.max(this.alpha, 0.14);
   }
 
   setShowFacts(on) {
     this.showFacts = !!on;
-    this.alpha = Math.max(this.alpha, 0.15);
+    this.alpha = Math.max(this.alpha, 0.12);
   }
 
   _isVisible(n) {
@@ -526,7 +525,11 @@ class GraphView {
   }
 
   _step() {
-    if (this.alpha < 0.02) return;
+    // Higher cutoff + stronger damping than the stock defaults so the
+    // graph settles quickly after a bloom. With the old values a single
+    // re-heat kept things drifting for several seconds, which read as
+    // jarring motion under the selected node.
+    if (this.alpha < 0.06) return;
 
     const nodes = this.nodes.filter((n) => this._isVisible(n));
     if (!nodes.length) return;
@@ -535,7 +538,7 @@ class GraphView {
     const LINK_DIST = 100;
     const LINK_K = 0.06;
     const CENTER_K = 0.008;
-    const FRICTION = 0.84;
+    const FRICTION = 0.74;
 
     // Repulsion (O(n²); fine for our scale)
     for (let i = 0; i < nodes.length; i++) {
@@ -591,7 +594,7 @@ class GraphView {
       if (n.y > this.height - margin){ n.y = this.height - margin; n.vy *= -0.3; }
     }
 
-    this.alpha *= 0.992;
+    this.alpha *= 0.955;
   }
 
   _radius(n) {
@@ -1059,7 +1062,7 @@ function renderTraces(traces) {
 
 function deselectEntity() {
   graph.setSelected(null);
-  graph.alpha = Math.max(graph.alpha, 0.25);
+  graph.alpha = Math.max(graph.alpha, 0.1);
   renderDetailPlaceholder();
 }
 
