@@ -1578,11 +1578,6 @@ function renderStreamsForAsOf() {
   renderTraces((state.traces ?? []).filter(passesTrace));
 }
 
-function activityLimits() {
-  const size = $('#activity-overlay')?.dataset.size ?? 'small';
-  return size === 'large' ? { msg: 10, trace: 6 } : { msg: 4, trace: 3 };
-}
-
 function renderMessages(messages) {
   const list = $('#stream-messages');
   const total = messages.length;
@@ -1594,8 +1589,7 @@ function renderMessages(messages) {
     list.append(emptyStreamCard('messages'));
     return;
   }
-  const shown = messages.slice(0, activityLimits().msg);
-  for (const m of shown) {
+  for (const m of messages) {
     list.append(
       el('li', { class: 'message' + freshClass(m.id) }, [
         el('span', { class: 'message__time' }, fmtTime(m.created_at)),
@@ -1617,8 +1611,7 @@ function renderTraces(traces) {
     list.append(emptyStreamCard('traces'));
     return;
   }
-  const shown = traces.slice(0, activityLimits().trace);
-  for (const t of shown) {
+  for (const t of traces) {
     const successKey = t.success === 1 ? '1' : t.success === 0 ? '0' : '-';
     list.append(
       el('li', {

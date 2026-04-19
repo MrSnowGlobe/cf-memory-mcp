@@ -1277,7 +1277,15 @@ input[type="range"]::-moz-range-thumb {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
+.activity-overlay__list::-webkit-scrollbar { width: 6px; }
+.activity-overlay__list::-webkit-scrollbar-track { background: transparent; }
+.activity-overlay__list::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+.activity-overlay__list::-webkit-scrollbar-thumb:hover { background: var(--rule-warm); }
+.activity-overlay[data-size="large"] .activity-overlay__list { max-height: 260px; }
 
 /* Compact message row inside the overlay — drop the timestamp column
    and cap content to one line so four rows fit comfortably. */
