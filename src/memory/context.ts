@@ -24,18 +24,30 @@ const DEFAULT_LIMITS = {
   traces: 3,
 } as const;
 
+/** A partial-failure record surfaced to the caller. */
+export interface ContextError {
+  source: string;
+  message: string;
+}
+
+export interface BuildContextResult {
+  context: string;
+  errors: ContextError[];
+}
+
 /**
- * Builds a unified context string by querying all three memory subsystems
- * in parallel and formatting the results into a structured text block.
- *
- * This is a plain function (not a class) per project conventions.
+ * Builds a unified context by querying all three memory subsystems in
+ * parallel. Returns the formatted text plus any per-query errors that were
+ * swallowed internally, so callers can surface partial failures.
  */
 export async function buildContext(
   env: Bindings,
   projectId: string,
   userId: string,
   input: ContextInput
-): Promise<string> {
+): Promise<BuildContextResult> {
+  const errors: ContextError[] = [];
+  const safe = makeSafeQuery(errors, projectId, userId);
   const include = input.include ?? ['short_term', 'long_term', 'procedural'];
   const limits = {
     messages: input.limits?.messages ?? DEFAULT_LIMITS.messages,
@@ -58,32 +70,38 @@ export async function buildContext(
 
   const conversationPromise: Promise<MaybeMessages> =
     include.includes('short_term') && input.session_id
-      ? safeQuery(() => shortTerm.getConversation(input.session_id!, limits.messages))
+      ? safe('conversation', () =>
+          shortTerm.getConversation(input.session_id!, limits.messages)
+        )
       : Promise.resolve([]);
 
   const messageSearchPromise: Promise<MaybeSearchResults> =
     include.includes('short_term')
-      ? safeQuery(() => shortTerm.searchMessages(input.query, { limit: limits.messages }))
+      ? safe('message_search', () =>
+          shortTerm.searchMessages(input.query, { limit: limits.messages })
+        )
       : Promise.resolve([]);
 
   const entitySearchPromise: Promise<MaybeSearchResults> =
     include.includes('long_term')
-      ? safeQuery(() => longTerm.searchEntities(input.query, limits.entities))
+      ? safe('entity_search', () => longTerm.searchEntities(input.query, limits.entities))
       : Promise.resolve([]);
 
   const preferenceSearchPromise: Promise<MaybeSearchResults> =
     include.includes('long_term')
-      ? safeQuery(() => longTerm.searchPreferences(input.query, limits.preferences))
+      ? safe('preference_search', () =>
+          longTerm.searchPreferences(input.query, limits.preferences)
+        )
       : Promise.resolve([]);
 
   const factSearchPromise: Promise<MaybeSearchResults> =
     include.includes('long_term')
-      ? safeQuery(() => longTerm.searchFacts(input.query, limits.facts))
+      ? safe('fact_search', () => longTerm.searchFacts(input.query, limits.facts))
       : Promise.resolve([]);
 
   const traceSearchPromise: Promise<MaybeSearchResults> =
     include.includes('procedural')
-      ? safeQuery(() => procedural.searchTraces(input.query, limits.traces))
+      ? safe('trace_search', () => procedural.searchTraces(input.query, limits.traces))
       : Promise.resolve([]);
 
   const [
@@ -106,11 +124,11 @@ export async function buildContext(
   // 2. Hydrate search results by looking up full D1 rows
   // ------------------------------------------------------------------
   const [messages, entities, preferences, facts, traces] = await Promise.all([
-    hydrateMessages(env, messageResults),
-    hydrateEntities(env, entityResults),
-    hydratePreferences(env, preferenceResults),
-    hydrateFacts(env, factResults),
-    hydrateTraces(env, traceResults),
+    hydrateMessages(env, messageResults, safe),
+    hydrateEntities(env, entityResults, safe),
+    hydratePreferences(env, preferenceResults, safe),
+    hydrateFacts(env, factResults, safe),
+    hydrateTraces(env, traceResults, safe),
   ]);
 
   // ------------------------------------------------------------------
@@ -147,7 +165,7 @@ export async function buildContext(
     const topEntities = entities
       .slice(0, GRAPH.contextEntitiesToExpand)
       .map(({ row }) => row);
-    const neighborGroups = await fetchNeighborGroups(env, projectId, userId, topEntities);
+    const neighborGroups = await fetchNeighborGroups(env, projectId, userId, topEntities, safe);
     if (neighborGroups.length > 0) {
       const groupLines = neighborGroups.map(({ root, neighbors }) => {
         const items = neighbors
@@ -191,25 +209,47 @@ export async function buildContext(
     sections.push(`## Past Similar Tasks\n${lines.join('\n')}`);
   }
 
-  return sections.join('\n\n');
+  return { context: sections.join('\n\n'), errors };
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+type SafeQuery = <T>(source: string, fn: () => Promise<T[]>) => Promise<T[]>;
+
 /**
- * Wraps a query function so it never throws. If it fails, an empty array
- * is returned and the error is silently consumed (logged via console.error
- * which Workers captures).
+ * Factory for a labelled safe-query wrapper. Failures are logged as
+ * structured JSON (source, projectId, userId, error class, message) and
+ * collected into the shared `errors` array so callers can surface partial
+ * failures in their responses.
  */
-async function safeQuery<T>(fn: () => Promise<T[]>): Promise<T[]> {
-  try {
-    return await fn();
-  } catch (err: unknown) {
-    console.error('[context] query failed:', err);
-    return [];
-  }
+function makeSafeQuery(
+  errors: ContextError[],
+  projectId: string,
+  userId: string
+): SafeQuery {
+  return async function safe<T>(source: string, fn: () => Promise<T[]>): Promise<T[]> {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const name = err instanceof Error ? err.constructor.name : 'UnknownError';
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          component: 'context',
+          source,
+          project_id: projectId,
+          user_id: userId,
+          error: name,
+          message,
+        })
+      );
+      errors.push({ source, message: `${name}: ${message}` });
+      return [];
+    }
+  };
 }
 
 /** Truncate a string to `maxLen` characters, appending an ellipsis if needed. */
@@ -238,11 +278,12 @@ interface Hydrated<T> {
 
 async function hydrateMessages(
   env: Bindings,
-  results: SearchResult[]
+  results: SearchResult[],
+  safe: SafeQuery
 ): Promise<Hydrated<MessageRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
-  const rows = await safeQuery(async () => {
+  const rows = await safe('hydrate_messages', async () => {
     const res = await env.DB.prepare(
       `SELECT * FROM messages WHERE vector_id IN (${placeholders})`
     )
@@ -255,11 +296,12 @@ async function hydrateMessages(
 
 async function hydrateEntities(
   env: Bindings,
-  results: SearchResult[]
+  results: SearchResult[],
+  safe: SafeQuery
 ): Promise<Hydrated<EntityRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
-  const rows = await safeQuery(async () => {
+  const rows = await safe('hydrate_entities', async () => {
     const res = await env.DB.prepare(
       `SELECT * FROM entities WHERE id IN (${placeholders})`
     )
@@ -272,11 +314,12 @@ async function hydrateEntities(
 
 async function hydratePreferences(
   env: Bindings,
-  results: SearchResult[]
+  results: SearchResult[],
+  safe: SafeQuery
 ): Promise<Hydrated<PreferenceRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
-  const rows = await safeQuery(async () => {
+  const rows = await safe('hydrate_preferences', async () => {
     const res = await env.DB.prepare(
       `SELECT * FROM preferences WHERE id IN (${placeholders})`
     )
@@ -289,11 +332,12 @@ async function hydratePreferences(
 
 async function hydrateFacts(
   env: Bindings,
-  results: SearchResult[]
+  results: SearchResult[],
+  safe: SafeQuery
 ): Promise<Hydrated<FactRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
-  const rows = await safeQuery(async () => {
+  const rows = await safe('hydrate_facts', async () => {
     const res = await env.DB.prepare(
       `SELECT * FROM facts WHERE id IN (${placeholders})`
     )
@@ -306,11 +350,12 @@ async function hydrateFacts(
 
 async function hydrateTraces(
   env: Bindings,
-  results: SearchResult[]
+  results: SearchResult[],
+  safe: SafeQuery
 ): Promise<Hydrated<TraceRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
-  const rows = await safeQuery(async () => {
+  const rows = await safe('hydrate_traces', async () => {
     const res = await env.DB.prepare(
       `SELECT * FROM reasoning_traces WHERE id IN (${placeholders})`
     )
@@ -330,12 +375,13 @@ async function fetchNeighborGroups(
   env: Bindings,
   projectId: string,
   userId: string,
-  roots: EntityRow[]
+  roots: EntityRow[],
+  safe: SafeQuery
 ): Promise<Array<{ root: EntityRow; neighbors: NeighborRow[] }>> {
   if (roots.length === 0) return [];
   const groups = await Promise.all(
     roots.map(async (root) => {
-      const neighbors = await safeQuery(() =>
+      const neighbors = await safe('neighbor_traversal', () =>
         traverseRelations(env, root.id, projectId, userId, {
           maxDepth: 1,
           limit: GRAPH.contextNeighborsPerEntity,

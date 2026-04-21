@@ -445,8 +445,10 @@ async function dispatchToolCall(
 
     case 'memory_get_context': {
       const parsed = parseArgs(ContextRequestSchema, args);
-      const context = await buildContext(env, projectId, userId, parsed);
-      return { context };
+      const result = await buildContext(env, projectId, userId, parsed);
+      return result.errors.length > 0
+        ? { context: result.context, errors: result.errors }
+        : { context: result.context };
     }
 
     case 'memory_add_entity': {
