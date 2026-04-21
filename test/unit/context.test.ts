@@ -50,16 +50,17 @@ describe('buildContext', () => {
     const trace = await proc.startTrace({ task: 'Context test task' });
     await proc.completeTrace(trace.id, 'Completed', true);
 
-    const context = await buildContext(testEnv, PROJECT_ID, 'default', {
+    const result = await buildContext(testEnv, PROJECT_ID, 'default', {
       query: 'context testing',
       session_id: 'ctx-sess',
     });
 
-    expect(typeof context).toBe('string');
+    expect(typeof result.context).toBe('string');
+    expect(result.errors).toEqual([]);
     // Should contain the recent conversation section
-    expect(context).toContain('## Recent Conversation');
-    expect(context).toContain('Hello context builder');
-    expect(context).toContain('Hi there!');
+    expect(result.context).toContain('## Recent Conversation');
+    expect(result.context).toContain('Hello context builder');
+    expect(result.context).toContain('Hi there!');
   });
 
   it('respects include filter (only requested types)', async () => {
@@ -75,31 +76,31 @@ describe('buildContext', () => {
     });
 
     // Only include short_term
-    const context = await buildContext(testEnv, PROJECT_ID, 'default', {
+    const result = await buildContext(testEnv, PROJECT_ID, 'default', {
       query: 'test query',
       session_id: 'ctx-sess-2',
       include: ['short_term'],
     });
 
-    expect(typeof context).toBe('string');
+    expect(typeof result.context).toBe('string');
     // Should include conversation
-    expect(context).toContain('## Recent Conversation');
+    expect(result.context).toContain('## Recent Conversation');
     // Should NOT contain long_term or procedural sections
     // (the sections are omitted entirely when not included)
-    expect(context).not.toContain('## Past Similar Tasks');
+    expect(result.context).not.toContain('## Past Similar Tasks');
   });
 
   it('handles empty results gracefully (no crash)', async () => {
     // No data seeded — everything should be empty
-    const context = await buildContext(testEnv, PROJECT_ID, 'default', {
+    const result = await buildContext(testEnv, PROJECT_ID, 'default', {
       query: 'anything',
     });
 
-    expect(typeof context).toBe('string');
+    expect(typeof result.context).toBe('string');
     // Should be an empty string (no sections) or a string without section headers
     // since there is no data
-    expect(context).not.toContain('undefined');
-    expect(context).not.toContain('null');
+    expect(result.context).not.toContain('undefined');
+    expect(result.context).not.toContain('null');
   });
 
   it('respects limits', async () => {
@@ -110,7 +111,7 @@ describe('buildContext', () => {
       await stm.addMessage('ctx-limits', 'user', `Message ${i}`);
     }
 
-    const context = await buildContext(testEnv, PROJECT_ID, 'default', {
+    const result = await buildContext(testEnv, PROJECT_ID, 'default', {
       query: 'limits test',
       session_id: 'ctx-limits',
       limits: {
@@ -122,11 +123,11 @@ describe('buildContext', () => {
       },
     });
 
-    expect(typeof context).toBe('string');
+    expect(typeof result.context).toBe('string');
     // The conversation should be limited to 2 messages
-    if (context.includes('## Recent Conversation')) {
-      // Count the number of "user:" or "assistant:" lines in the conversation section
-      const conversationSection = context.split('## Recent Conversation')[1]?.split('##')[0] ?? '';
+    if (result.context.includes('## Recent Conversation')) {
+      const conversationSection =
+        result.context.split('## Recent Conversation')[1]?.split('##')[0] ?? '';
       const lines = conversationSection
         .split('\n')
         .filter((l) => l.startsWith('user:') || l.startsWith('assistant:'));
@@ -144,12 +145,12 @@ describe('buildContext', () => {
       object: 'value',
     });
 
-    const context = await buildContext(testEnv, PROJECT_ID, 'default', {
+    const result = await buildContext(testEnv, PROJECT_ID, 'default', {
       query: 'no session test',
     });
 
-    expect(typeof context).toBe('string');
+    expect(typeof result.context).toBe('string');
     // Should not crash
-    expect(context).not.toContain('undefined');
+    expect(result.context).not.toContain('undefined');
   });
 });

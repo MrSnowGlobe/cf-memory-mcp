@@ -46,7 +46,7 @@ export class ProceduralMemory {
     const metaJson = JSON.stringify(input.metadata ?? {});
 
     await this.env.DB.prepare(
-      'INSERT INTO reasoning_traces (id, project_id, user_id, session_id, task, started_at, triggered_by_message_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO reasoning_traces (id, project_id, user_id, session_id, task, started_at, triggered_by_message_id, metadata, vector_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
       .bind(
         id,
@@ -56,9 +56,21 @@ export class ProceduralMemory {
         input.task,
         now,
         input.triggered_by_message_id ?? null,
-        metaJson
+        metaJson,
+        id
       )
       .run();
+
+    // Embed the task so in-flight traces are searchable. completeTrace
+    // re-embeds with the richer task+outcome text once the trace closes.
+    const embedding = await getEmbedding(input.task, this.env.AI);
+    await vectorInsert(
+      this.env.VEC_TRACES,
+      id,
+      embedding,
+      getWriteNamespace(this.projectId, this.userId),
+      { task: input.task, success: 'pending' }
+    );
 
     const row: TraceRow = {
       id,
@@ -73,7 +85,7 @@ export class ProceduralMemory {
       duration_ms: null,
       triggered_by_message_id: input.triggered_by_message_id ?? null,
       metadata: metaJson,
-      vector_id: null,
+      vector_id: id,
     };
     await publishEvent(this.env, this.projectId, this.userId, 'trace_started', {
       id: row.id,
@@ -112,8 +124,10 @@ export class ProceduralMemory {
       .bind(outcome, successInt, completedAt, durationMs, id, id, this.projectId, this.userId)
       .run();
 
-    // 4. Embed the task description and insert into Vectorize
-    const embedding = await getEmbedding(trace.task, this.env.AI);
+    // 4. Re-embed with task + outcome for richer retrieval; upserts the
+    // pending vector that startTrace inserted. Skip if outcome is empty.
+    const embedText = outcome ? `${trace.task}\n${outcome}` : trace.task;
+    const embedding = await getEmbedding(embedText, this.env.AI);
     await vectorInsert(this.env.VEC_TRACES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
       task: trace.task,
       success: String(success),
