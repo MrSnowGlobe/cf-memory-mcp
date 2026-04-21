@@ -1,8 +1,8 @@
 export const EMBEDDING = {
-  model: '@cf/baai/bge-base-en-v1.5',
+  model: '@cf/google/embeddinggemma-300m',
   dimensions: 768,
-  // bge-base-en-v1.5 tokenizer caps at 512 tokens (~2000 chars).
-  maxChars: 2000,
+  // embeddinggemma-300m tokenizer caps at 2048 tokens (~8000 chars).
+  maxChars: 8000,
   batchSize: 100,
 } as const;
 
