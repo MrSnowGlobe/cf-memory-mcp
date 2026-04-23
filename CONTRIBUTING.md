@@ -56,7 +56,7 @@ npx vitest run test/unit/scoping.test.ts    # Run a specific test file
 npx vitest --watch                          # Watch mode
 ```
 
-All 85 tests should pass before submitting a PR.
+All 138 tests should pass before submitting a PR.
 
 ## Code Style
 
@@ -74,15 +74,23 @@ See the [design document](cf-agent-memory-design.md) for full architecture detai
 
 ```
 src/
-  middleware/    # Auth and project scoping
-  memory/       # Short-term, long-term, procedural memory classes
-  services/     # Embeddings, vectorize, cache, entity resolution
-  mcp/          # MCP SSE server
-  utils/        # IDs, pagination, Zod schemas
+  router.ts              # Slim assembler — mounts domain sub-apps, wires middleware
+  config.ts              # Tunable constants (thresholds, TTLs, cascade boosts)
+  types.ts               # Env bindings + D1 row types
+  auth/                  # Browser session auth (login / logout / me)
+  middleware/            # Bearer + scope + rate-limit middleware
+  memory/                # Short-term, long-term, procedural memory classes + context + promotion
+  services/              # Embeddings, vectorize (cascadingSearch), cache, entity resolution
+  routes/                # Per-domain route modules mounted by router.ts
+  mcp/                   # MCP server (Streamable HTTP + SSE transports, 14 tools)
+  durable-objects/       # MemoryEventsDO — per-scope WebSocket pub/sub
+  admin/                 # One-shot admin helpers (migrate-namespaces, reembed, purge)
+  utils/                 # IDs, pagination, Zod schemas, typed errors
 test/
-  unit/         # Vitest tests (one file per module)
-  helpers/      # Miniflare test environment setup
-migrations/     # D1 SQL migrations
+  unit/                  # Vitest tests (one file per module)
+  helpers/               # Miniflare test environment setup
+migrations/              # D1 SQL migrations
+public/                  # Observatory visualizer (served as Workers Assets)
 ```
 
 ## Submitting Changes
@@ -104,14 +112,14 @@ migrations/     # D1 SQL migrations
 
 These rules exist for data integrity and security. PRs that violate them will be rejected:
 
-1. Every table with user data has a `project_id` column
-2. Every Vectorize insert uses `namespace: projectId`
-3. Every search uses `cascadingSearch()` (project + global)
-4. Writes always go to the project from middleware — never from the request body
-5. KV keys are always prefixed with `{projectId}:`
-6. All IDs are lowercase hex UUIDs
-7. All timestamps are ISO 8601 strings
-8. D1 queries must use parameterized bindings
+1. Every table with user data has both `project_id` and `user_id` columns (descendants inherit via FK cascade)
+2. Every Vectorize insert uses `namespace: ${projectId}:${userId}` via `getWriteNamespace()`
+3. Every search uses `cascadingSearch()` — never a direct Vectorize `query()` call
+4. Writes go to `c.get('projectId')` / `c.get('userId')` from middleware — never from the request body
+5. KV keys are always prefixed with `${projectId}:${userId}:` via `cacheGet` / `cacheSet` helpers
+6. All IDs are lowercase hex UUIDs (`crypto.randomUUID().replace(/-/g, '')`)
+7. All timestamps are ISO 8601 strings (`new Date().toISOString()`)
+8. D1 queries must use parameterized `.bind()` — never interpolate values into SQL
 
 ## Reporting Issues
 

@@ -9,9 +9,13 @@ Inspired by [neo4j-labs/agent-memory](https://github.com/neo4j-labs/agent-memory
 - **Three memory types** — short-term (conversations), long-term (entities, preferences, temporal facts), procedural (reasoning traces, tool stats)
 - **Semantic search** across all memory types via Vectorize (768-dim embeddings, cosine similarity)
 - **Entity resolution** — 3-stage deduplication (exact match, fuzzy Levenshtein >= 0.85, semantic cosine >= 0.8)
+- **Graph traversal** — typed relations between entities, K-hop walks, subgraph extraction
 - **4-tier scoping** — project+user > user > project > global, with automatic cascading reads and scope-boosted ranking
-- **MCP server** — JSON-RPC over Streamable HTTP and SSE, works with Claude Code, Claude Desktop, or any MCP client
-- **REST API** — 30+ endpoints for direct integration
+- **MCP server** — 14 tools over JSON-RPC / Streamable HTTP + SSE, works with Claude Code, Claude Desktop, or any MCP client
+- **REST API** — 40+ endpoints for direct integration
+- **Live events** — per-scope WebSocket pub/sub via a hibernatable Durable Object; stream writes to any subscribed client
+- **Observatory visualizer** — built-in browser UI (served as Workers Assets) with force-directed graph, timeline scrubber, and live activity feed
+- **Rate limiting** — three-tier edge-resident limiter (global per-tenant, AI-bound paths, per-MCP-method) via Cloudflare's `ratelimit` bindings
 - **Scale-to-zero** — $5/mo base on Cloudflare Workers Paid plan
 - **Single deploy** — `npx wrangler deploy`, no infrastructure to manage
 
@@ -74,7 +78,7 @@ Client (MCP / REST)
 └─────────────────────────────────┘
 ```
 
-D1 stores all structured data (13 tables). Vectorize stores embeddings across 5 indexes (messages, entities, preferences, facts, traces), namespaced by scope tier. KV caches hot paths. Workers AI generates 768-dimension embeddings using `@cf/baai/bge-base-en-v1.5`.
+D1 stores all structured data (13 tables). Vectorize stores embeddings across 5 indexes (messages, entities, preferences, facts, traces), namespaced by scope tier. KV caches hot paths. Workers AI generates 768-dimension embeddings using `@cf/google/embeddinggemma-300m` (2048-token context, better MTEB scores than the older `bge-base-en-v1.5` — swap by editing `EMBEDDING_MODEL` in `wrangler.toml`).
 
 ## Prerequisites
 
@@ -137,6 +141,20 @@ curl https://cf-agent-memory.<your-subdomain>.workers.dev/health
 # {"status":"ok"}
 ```
 
+## Rate Limiting
+
+The worker ships with three Cloudflare `ratelimit` bindings (already in `wrangler.toml.example`):
+
+| Binding | Default cap | Keyed on | Scope |
+|---------|-------------|----------|-------|
+| `RL_GLOBAL` | 300 req/min | `{projectId}:{userId}` | All `/api/*` and `/mcp/*` |
+| `RL_AI` | 60 req/min | `{projectId}:{userId}` | POST/PUT under `/api/v1/*`, all `*/search`, and `/api/v1/context` |
+| `RL_MCP` | 30 req/min | `{projectId}:{userId}:{toolName}` | Per-method on MCP `tools/call` |
+
+The broad `RL_GLOBAL` limiter is a code-level stand-in for an edge-level Cloudflare WAF rate-limiting rule (which requires a Pro plan for header-keyed characteristics). Tune any of the three by editing the `simple = { limit = N, period = 60 }` block in `wrangler.toml` and redeploying. All three bindings are optional — the middleware is a no-op if a binding is absent, so tests and forks work without them.
+
+Rate-limited requests receive HTTP 429 with `Retry-After: 10`.
+
 ## Local Development
 
 ```bash
@@ -150,7 +168,7 @@ Tests use Vitest with Miniflare — no Cloudflare account needed.
 
 ## MCP Integration
 
-This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server exposing 8 tools over both Streamable HTTP (`POST /mcp`) and SSE (`GET /mcp/sse`) transports.
+This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server exposing 14 tools over both Streamable HTTP (`POST /mcp`) and SSE (`GET /mcp/sse`) transports.
 
 ### Claude Code / Claude Desktop
 
@@ -185,15 +203,43 @@ To scope memory per user, add an `X-User-Id` header:
 
 ### Available MCP Tools
 
+**Short-term (conversations)**
+
 | Tool | Description |
 |------|-------------|
+| `memory_create_session` | Create a short-term memory session to group messages |
 | `memory_add_message` | Store a conversation message with automatic embedding |
-| `memory_search` | Semantic search across all memory types (cascading) |
-| `memory_get_context` | Build a unified context string from all memory |
+
+**Long-term (knowledge)**
+
+| Tool | Description |
+|------|-------------|
 | `memory_add_entity` | Add an entity with automatic 3-stage deduplication |
+| `memory_add_relation` | Record a typed directed edge between two entities (graph) |
 | `memory_add_preference` | Store a categorized preference |
-| `memory_add_fact` | Store a temporal fact (subject-predicate-object) |
+| `memory_add_fact` | Store a temporal fact (subject-predicate-object triple) |
+| `memory_traverse` | Walk the entity graph from a starting node (depth + direction) |
+
+**Procedural (reasoning)**
+
+| Tool | Description |
+|------|-------------|
 | `memory_start_trace` | Begin recording a reasoning trace |
+| `memory_add_step` | Append a thought/action/observation step to an open trace |
+| `memory_record_tool_call` | Record a tool call attached to a reasoning step |
+| `memory_complete_trace` | Finalise a trace with outcome + success flag |
+
+**Retrieval**
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Semantic search across all memory types (cascading) |
+| `memory_get_context` | Build a unified context string from all memory types |
+
+**Promotion**
+
+| Tool | Description |
+|------|-------------|
 | `memory_promote_to_global` | Promote a memory item to user or global scope |
 
 ### Claude Code Setup
@@ -209,13 +255,15 @@ This gives your Claude Code sessions persistent memory backed by this service.
 
 ## REST API
 
-All endpoints require `Authorization: Bearer <token>` and accept optional `X-Project-Id` (default: `"default"`) and `X-User-Id` (default: `"default"`) headers for scoping.
+All endpoints require `Authorization: Bearer <token>` and accept optional `X-Project-Id` (default: `"default"`) and `X-User-Id` (default: `"default"`) headers for scoping. Alternatively, a valid browser session cookie (set via `/auth/login`) is accepted for the same routes.
 
 ### Projects & Users
 
 ```
-POST   /api/v1/projects                    Create a project
-GET    /api/v1/projects                    List projects
+POST   /api/v1/projects                    Create (or idempotently return) a project
+GET    /api/v1/projects                    List projects (?include_archived=true)
+PATCH  /api/v1/projects/:id                Update display_name / archived / metadata
+DELETE /api/v1/projects/:id                Delete an empty project (refuses if data exists)
 
 POST   /api/v1/users                       Create a user
 GET    /api/v1/users                       List users
@@ -235,46 +283,83 @@ POST   /api/v1/sessions/:id/messages/batch Batch add messages
 POST   /api/v1/messages/search             Semantic message search
 ```
 
-### Entities, Preferences & Facts (Long-Term)
+### Entities, Relations & Graph (Long-Term)
 
 ```
 POST   /api/v1/entities                    Add entity (with dedup)
 GET    /api/v1/entities/:id                Get entity
-PUT    /api/v1/entities/:id                Update entity
+PUT    /api/v1/entities/:id                Update entity (re-embeds on searchable-field change)
 DELETE /api/v1/entities/:id                Delete entity
 POST   /api/v1/entities/search             Semantic entity search
 
-POST   /api/v1/entities/:id/relations      Add a relation
+POST   /api/v1/entities/:id/relations      Add a typed relation
 GET    /api/v1/entities/:id/relations      Get relations
+GET    /api/v1/entities/:id/traverse       K-hop graph walk (?depth=&direction=out|in|both)
+GET    /api/v1/entities/:id/subgraph       Extract the neighbourhood subgraph around an entity
+```
 
+### Preferences & Facts (Long-Term)
+
+```
 POST   /api/v1/preferences                 Add preference
 GET    /api/v1/preferences                 List preferences (?category=)
+PUT    /api/v1/preferences/:id             Update preference (re-embeds on change)
 POST   /api/v1/preferences/search          Semantic preference search
 
 POST   /api/v1/facts                       Add fact
 GET    /api/v1/facts                       List facts (?subject=&predicate=, auto-excludes expired)
-POST   /api/v1/facts/search               Semantic fact search
+PUT    /api/v1/facts/:id                   Update fact (re-embeds on change)
+POST   /api/v1/facts/search                Semantic fact search
 PUT    /api/v1/facts/:id/invalidate        Soft-invalidate a fact
 ```
 
 ### Traces & Tool Calls (Procedural)
 
 ```
-POST   /api/v1/traces                      Start a trace
-PUT    /api/v1/traces/:id/complete         Complete a trace
+POST   /api/v1/traces                      Start a trace (embeds task on start)
 GET    /api/v1/traces                      List traces (?session_id=&success=)
-POST   /api/v1/traces/search              Semantic trace search
+GET    /api/v1/traces/:id                  Get a trace
+PUT    /api/v1/traces/:id/complete         Complete a trace
+POST   /api/v1/traces/search               Semantic trace search
 
 POST   /api/v1/traces/:traceId/steps       Add a reasoning step
 POST   /api/v1/steps/:stepId/tool-calls    Record a tool call
 GET    /api/v1/tool-stats                  Get tool usage statistics
 ```
 
-### Context & Promotion
+### Context, Promotion & Snapshot
 
 ```
 POST   /api/v1/context                     Build unified context from all memory types
 POST   /api/v1/promote                     Promote an item to user or global scope
+GET    /api/v1/snapshot                    Single-read bootstrap for the current scope (Observatory)
+GET    /api/v1/atlas                       Cross-scope directory of every project and user
+```
+
+### Real-Time Events
+
+```
+GET    /api/v1/events                      WebSocket subscribe — per-scope DO fans out writes
+```
+
+The DO broadcasts `entity_added`, `fact_added`, `preference_added`, `message_added`, `trace_started`, and `trace_completed` events. Browser clients that can't set custom headers can pass `?project_id=<id>&user_id=<id>` as query-param fallbacks.
+
+### Browser Auth
+
+```
+POST   /auth/login                         Exchange OBSERVATORY_PASSWORD for a signed cookie
+POST   /auth/logout                        Clear the session cookie
+GET    /auth/me                            Check session status
+```
+
+Cookie auth is an alternative to the bearer token for the Observatory UI. The bearer token still works for all service-to-service calls.
+
+### Admin
+
+```
+POST   /api/v1/admin/migrate-namespaces    One-time migration for namespace scheme changes
+DELETE /api/v1/admin/projects/:id/purge    Hard-purge every row, vector, and KV entry for a project
+                                           (?confirm=yes required, ?delete_project=true drops the row)
 ```
 
 ## Example Usage
