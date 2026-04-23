@@ -16,6 +16,19 @@ export interface Bindings {
   /** Durable Object namespace for per-scope memory event pub/sub. Optional
    *  so tests can construct an env without wiring a DO. */
   EVENTS?: DurableObjectNamespace;
+  /** Rate limiter for AI-bound paths (embeddings / search / context). Optional
+   *  so tests can run without a live binding. */
+  RL_AI?: RateLimit;
+  /** Rate limiter for MCP tool-call dispatch, keyed per method. Optional. */
+  RL_MCP?: RateLimit;
+  /** Broad per-tenant cap across all /api/* and /mcp/* requests. Stand-in for
+   *  an edge-level WAF rule when the Pro plan isn't in play. Optional. */
+  RL_GLOBAL?: RateLimit;
+}
+
+/** Minimal Cloudflare rate-limit binding surface we depend on. */
+export interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
 export type Variables = {

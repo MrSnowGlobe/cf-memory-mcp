@@ -6,6 +6,7 @@ import { authMiddleware } from './middleware/auth';
 import { loginHandler, logoutHandler, meHandler } from './auth/session';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
+import { aiRateLimitMiddleware, globalRateLimitMiddleware } from './middleware/rate-limit';
 import mcpServer from './mcp/server';
 
 import projectsRoutes from './routes/projects';
@@ -71,6 +72,17 @@ app.use('/api/*', userScopeMiddleware);
 app.use('/mcp/*', authMiddleware);
 app.use('/mcp/*', projectScopeMiddleware);
 app.use('/mcp/*', userScopeMiddleware);
+
+// Broad per-tenant cap — stands in for an edge-level WAF rule.
+app.use('/api/*', globalRateLimitMiddleware);
+app.use('/mcp/*', globalRateLimitMiddleware);
+
+// Rate-limit AI-bound routes. Writes embed new content; search + context
+// embed the query. Non-AI reads (list/get by id) are intentionally excluded
+// so a paused embedding quota doesn't block snapshot/atlas rendering.
+app.on(['POST', 'PUT'], '/api/v1/*', aiRateLimitMiddleware);
+app.use('/api/v1/*/search', aiRateLimitMiddleware);
+app.use('/api/v1/context', aiRateLimitMiddleware);
 
 // ---------------------------------------------------------------------------
 // Mount domain route modules. Each file owns its slice; this file just wires

@@ -319,6 +319,19 @@
           <div class="chart__legend" id="hover-legend" hidden></div>
         </div>
 
+        <!-- Tool instruments overlay — floats over the graph bottom-right. -->
+        <section class="tool-stats" aria-label="Tool instruments" aria-expanded="false">
+          <button type="button" class="tool-stats__head">
+            <h2>
+              <span class="tool-stats__tier">procedural</span>
+              tool&nbsp;instruments
+            </h2>
+            <span class="tool-stats__count" id="tool-stats-count">0</span>
+            <span class="tool-stats__caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="tool-stats__body" id="tool-stats-body"></div>
+        </section>
+
         <!-- Activity overlay — floats over the graph bottom-left. -->
         <aside class="activity-overlay" id="activity-overlay" aria-expanded="true" data-size="small">
           <button type="button" class="activity-overlay__head">
@@ -394,19 +407,6 @@
         <canvas id="timeline" width="1200" height="90"></canvas>
         <div class="timeline__tooltip" id="timeline-tooltip" hidden></div>
       </div>
-    </section>
-
-    <!-- Procedural — tool instruments (aggregated tool_stats) -->
-    <section class="tool-stats" aria-label="Tool instruments" aria-expanded="false">
-      <button type="button" class="tool-stats__head">
-        <h2>
-          <span class="tool-stats__tier">procedural</span>
-          tool&nbsp;instruments
-        </h2>
-        <span class="tool-stats__count" id="tool-stats-count">0</span>
-        <span class="tool-stats__caret" aria-hidden="true">▾</span>
-      </button>
-      <div class="tool-stats__body" id="tool-stats-body"></div>
     </section>
 
     </div><!-- /.view--observatory -->
