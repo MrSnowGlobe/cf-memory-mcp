@@ -34,6 +34,16 @@ You MUST call `memory_get_context` with:
 
 This returns a formatted context block. Use it to inform your next response.
 
+## Graph queries
+
+When the user asks how two things are connected ("how does Alice know Bob", "what's connected to the auth service"), prefer `memory_traverse` over `memory_search`:
+
+- `entity_id`: the starting node
+- `max_depth`: hops to walk (1–4, default 2)
+- `direction`: "out" (outgoing edges), "in" (incoming), or "both" (default)
+
+Use the resulting edges + nodes to explain the path. Fall back to `memory_search` if no traversal path exists.
+
 ## IMPORTANT
 
 - You MUST call the MCP tool before responding. No exceptions.

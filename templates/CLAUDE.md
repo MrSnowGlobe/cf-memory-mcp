@@ -16,8 +16,9 @@ This project has a persistent memory system via MCP. You MUST use it — do not 
 
 | Trigger | Tool to call | Never skip |
 |---------|-------------|------------|
-| /remember, "remember this", "save" | `memory_add_entity`, `memory_add_preference`, or `memory_add_fact` | MUST call before responding |
+| /remember, "remember this", "save" | `memory_add_entity`, `memory_add_relation`, `memory_add_preference`, or `memory_add_fact` | MUST call before responding |
 | /recall, "what do you know", "recall" | `memory_search` or `memory_get_context` | MUST call before responding |
+| "how is X connected to Y", "who does X know" | `memory_traverse` | MUST call before responding |
 | Starting a complex task | `memory_get_context` | MUST call before starting work |
 | "promote" | `memory_promote_to_global` | MUST call before responding |
 
