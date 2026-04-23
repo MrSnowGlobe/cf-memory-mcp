@@ -21,6 +21,9 @@ export interface Bindings {
   RL_AI?: RateLimit;
   /** Rate limiter for MCP tool-call dispatch, keyed per method. Optional. */
   RL_MCP?: RateLimit;
+  /** Broad per-tenant cap across all /api/* and /mcp/* requests. Stand-in for
+   *  an edge-level WAF rule when the Pro plan isn't in play. Optional. */
+  RL_GLOBAL?: RateLimit;
 }
 
 /** Minimal Cloudflare rate-limit binding surface we depend on. */

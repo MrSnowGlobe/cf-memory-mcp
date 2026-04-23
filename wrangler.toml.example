@@ -71,6 +71,15 @@ type = "ratelimit"
 namespace_id = "1002"
 simple = { limit = 30, period = 60 }
 
+# Broad per-tenant cap across all /api/* and /mcp/* requests. Replaces the
+# edge-level WAF rate-limiting rule (which requires a Pro plan for header-
+# keyed characteristics). Keyed on {projectId}:{userId}.
+[[unsafe.bindings]]
+name = "RL_GLOBAL"
+type = "ratelimit"
+namespace_id = "1003"
+simple = { limit = 300, period = 60 }
+
 # Observatory visualizer — static assets served at the worker root.
 # /api/* and /mcp/* still hit the Hono router; everything else falls back
 # to ./public (with index.html as the SPA entry).

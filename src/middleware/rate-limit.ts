@@ -29,6 +29,27 @@ export const aiRateLimitMiddleware = createMiddleware<AppType>(async (c, next) =
 });
 
 /**
+ * Broad per-tenant cap across every `/api/*` and `/mcp/*` request. Stands in
+ * for the edge-level WAF rate-limiting rule when a Pro plan isn't available.
+ * Requests are billed (CPU + request count) before being rejected, but the
+ * handler exits immediately so downstream D1/Vectorize/AI are untouched.
+ * No-op when `RL_GLOBAL` is not bound.
+ */
+export const globalRateLimitMiddleware = createMiddleware<AppType>(async (c, next) => {
+  const projectId = c.get('projectId') ?? 'default';
+  const userId = c.get('userId') ?? 'default';
+  const ok = await enforce(c.env.RL_GLOBAL, `${projectId}:${userId}`);
+  if (!ok) {
+    c.header('Retry-After', '10');
+    return c.json(
+      { error: 'Rate limit exceeded', scope: `${projectId}:${userId}` },
+      429
+    );
+  }
+  await next();
+});
+
+/**
  * Per-MCP-method limiter. Callers pass the tool name so each method gets
  * its own bucket — a runaway `memory_add_entity` loop can't starve
  * `memory_search`. No-op when `RL_MCP` is not bound.
