@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 
 [vars]
-EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
+EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m"
 EMBEDDING_DIMENSIONS = "768"
 AUTH_TOKEN = "CHANGE_ME"  # Bearer token for service-to-service calls (MCP, agents, scripts)
 # OBSERVATORY_PASSWORD: set as a secret, NOT in wrangler.toml.
