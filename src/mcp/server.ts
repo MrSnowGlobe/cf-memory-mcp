@@ -8,6 +8,7 @@ import { ProceduralMemory } from '../memory/procedural';
 import { buildContext } from '../memory/context';
 import { promote } from '../memory/promotion';
 import { generateId } from '../utils/ids';
+import { checkMcpMethodRate } from '../middleware/rate-limit';
 import { SSE } from '../config';
 import {
   AddMessageSchema,
@@ -615,6 +616,16 @@ mcp.post('/', async (c) => {
           !Array.isArray(params['arguments'])
             ? (params['arguments'] as Record<string, unknown>)
             : {};
+
+        const rateOk = await checkMcpMethodRate(
+          c.env.RL_MCP,
+          c.get('projectId'),
+          c.get('userId'),
+          toolName
+        );
+        if (!rateOk) {
+          return c.json(jsonRpcError(id, -32000, `Rate limit exceeded for ${toolName}`), 429);
+        }
 
         try {
           const result = await dispatchToolCall(c.env, c.get('projectId'), c.get('userId'), toolName, toolArgs);
