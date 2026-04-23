@@ -36,6 +36,19 @@ You MUST call `memory_add_fact` with:
 
 Examples: "Remember the API deadline is April 30" -> subject: API, predicate: deadline, object: 2026-04-30, valid_until: 2026-04-30. "Remember the DB password was rotated" -> time-stamped fact.
 
+### Relation (a typed edge between two existing entities)
+Use this when the knowledge is "Entity A <verb> Entity B" and you want it traversable as a graph later (e.g. `memory_traverse` from Alice finds Bob). Prefer a relation when the claim connects two *named things* you already track; prefer a fact when the object is a value, date, or free-form string.
+
+You MUST:
+1. Resolve both entities first — call `memory_add_entity` for each side (resolution dedupes; existing entities are returned rather than recreated). Capture the returned `id` for source and target.
+2. Call `memory_add_relation` with:
+   - `source_entity_id`: the returned id from step 1
+   - `target_entity_id`: the returned id from step 1
+   - `relation_type`: a short verb phrase (knows, works_at, reports_to, owns, acquired, located_in, etc.)
+   - `relation_strength`: optional 0–1 weight (default 1.0)
+
+Examples: "Remember Alice knows Bob" -> two entity resolves + relation knows. "Remember Cloudflare acquired Workers Launchpad" -> two entity resolves + relation acquired.
+
 ## When invoked without arguments
 
 Ask the user what they want to remember.
