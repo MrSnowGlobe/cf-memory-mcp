@@ -34,8 +34,16 @@ export const aiRateLimitMiddleware = createMiddleware<AppType>(async (c, next) =
  * Requests are billed (CPU + request count) before being rejected, but the
  * handler exits immediately so downstream D1/Vectorize/AI are untouched.
  * No-op when `RL_GLOBAL` is not bound.
+ *
+ * WebSocket upgrades are exempted: they represent a single long-lived
+ * connection rather than a burst of work, and rate-limiting them makes
+ * reconnects during write-heavy load silently fail (browser WS API hides
+ * HTTP 429 from client JS, so the retry loop never surfaces the cause).
  */
 export const globalRateLimitMiddleware = createMiddleware<AppType>(async (c, next) => {
+  if (c.req.header('Upgrade') === 'websocket') {
+    return next();
+  }
   const projectId = c.get('projectId') ?? 'default';
   const userId = c.get('userId') ?? 'default';
   const ok = await enforce(c.env.RL_GLOBAL, `${projectId}:${userId}`);
