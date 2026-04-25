@@ -225,13 +225,60 @@ function buildFactIndex(facts, entities) {
 }
 
 function loadSettings() {
+  let base;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    base = raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    base = { ...DEFAULT_SETTINGS };
   }
+  // URL wins over localStorage for scope — lets you paste a link into
+  // a new tab and land on the right project/user. Only scope is taken
+  // from the URL; baseUrl/token stay settings-owned (tokens don't
+  // belong in shareable links).
+  const urlScope = readScopeFromUrl();
+  if (urlScope.projectId) base.projectId = urlScope.projectId;
+  if (urlScope.userId) base.userId = urlScope.userId;
+  return base;
+}
+
+function readScopeFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project')?.trim() || '';
+    const userId = params.get('user')?.trim() || '';
+    return {
+      projectId: projectId || null,
+      userId: userId || null,
+    };
+  } catch {
+    return { projectId: null, userId: null };
+  }
+}
+
+// Reflect the current scope in the URL via history.replaceState so a
+// refresh lands back on the same project/user. Defaults are omitted
+// so the URL stays clean when nothing is scoped.
+function syncUrlToScope(opts = {}) {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (settings.projectId && settings.projectId !== 'default') {
+      params.set('project', settings.projectId);
+    } else {
+      params.delete('project');
+    }
+    if (settings.userId && settings.userId !== 'default') {
+      params.set('user', settings.userId);
+    } else {
+      params.delete('user');
+    }
+    const qs = params.toString();
+    const next = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+    const current = window.location.pathname + window.location.search + window.location.hash;
+    if (next === current) return;
+    if (opts.push) window.history.pushState(null, '', next);
+    else window.history.replaceState(null, '', next);
+  } catch {}
 }
 
 function saveSettings(s) {
@@ -1566,11 +1613,12 @@ function bindSettings() {
       live: $('#setting-live')?.checked ?? settings.live,
     };
     saveSettings(settings);
+    const scopeChanged = `${settings.projectId}:${settings.userId}` !== prevScope;
+    if (scopeChanged) syncUrlToScope({ push: true });
     updateScopeDisplay();
     close();
 
     // Reconnect live events when scope changed or toggle flipped.
-    const scopeChanged = `${settings.projectId}:${settings.userId}` !== prevScope;
     if (scopeChanged || settings.live !== prevLive) {
       disconnectLiveEvents();
       if (settings.live) connectLiveEvents();
@@ -2556,6 +2604,7 @@ function applyScope(projectId, userId, which) {
     (userId !== settings.userId ? 1 : 0);
   settings = { ...settings, projectId, userId };
   saveSettings(settings);
+  if (changed) syncUrlToScope({ push: true });
   updateScopeDisplay();
   switchView('observatory');
   if (changed === 0) {
@@ -3709,6 +3758,26 @@ function bindTimelineReset() {
   if (zoomBtn) zoomBtn.addEventListener('click', () => timeline?.resetZoom());
 }
 
+// Back/forward should re-apply the URL's scope so browser history
+// behaves as expected for a single-page app. Updates settings in
+// place, reconnects live events, and refreshes the snapshot.
+function bindScopeUrlSync() {
+  window.addEventListener('popstate', () => {
+    const urlScope = readScopeFromUrl();
+    const projectId = urlScope.projectId || 'default';
+    const userId = urlScope.userId || 'default';
+    const prevScope = `${settings.projectId}:${settings.userId}`;
+    const nextScope = `${projectId}:${userId}`;
+    if (prevScope === nextScope) return;
+    settings = { ...settings, projectId, userId };
+    saveSettings(settings);
+    updateScopeDisplay();
+    disconnectLiveEvents();
+    if (settings.live) connectLiveEvents();
+    void refresh();
+  });
+}
+
 function bindTimelinePlayback() {
   const btn = $('#timeline-play');
   if (btn) btn.addEventListener('click', togglePlayback);
@@ -3801,6 +3870,10 @@ async function init() {
   bindLogin();
   bindGlobalSearch();
   bindTraceInspector();
+  bindScopeUrlSync();
+  // Reflect scope in URL on first paint so a fresh load with saved
+  // settings but no URL params still produces a shareable link.
+  syncUrlToScope();
   updateScopeDisplay();
   renderTypeFilters();
 
