@@ -2394,6 +2394,31 @@ input[type="range"]::-moz-range-thumb {
 }
 .timeline__reset:hover { color: var(--long); border-color: var(--long); }
 
+.timeline__play[data-state="playing"] {
+  color: var(--long);
+  border-color: var(--long);
+  box-shadow: inset 0 0 0 1px var(--long);
+}
+.timeline__speed select {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 2px 4px;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.timeline__speed select:hover { color: var(--long); border-color: var(--long); }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 .timeline__frame {
   position: relative;
   border: 1px solid var(--rule);
@@ -2702,6 +2727,27 @@ body.has-inspector { overflow: hidden; }
 @keyframes live-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(143, 184, 146, 0.55); }
   50%      { box-shadow: 0 0 0 5px rgba(143, 184, 146, 0); }
+}
+
+/* Live ticker — briefly surfaces "+N entities · +M edges" next to the
+   live dot whenever events arrive, then fades back to empty. */
+.live-ticker {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--long);
+  padding: 4px 8px;
+  min-height: 16px;
+  opacity: 0;
+  transform: translateY(1px);
+  transition: opacity 260ms ease, transform 260ms ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.live-ticker[data-state="active"] {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* ============================================================

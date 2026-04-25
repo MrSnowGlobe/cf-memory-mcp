@@ -101,6 +101,8 @@
           <span class="live__label">live</span>
         </div>
 
+        <div class="live-ticker" id="live-ticker" data-state="idle" aria-live="polite" aria-atomic="true"></div>
+
         <button class="btn btn--ghost" id="refresh" title="Refresh snapshot (R)" aria-label="Refresh snapshot">
           <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
             <path
@@ -401,6 +403,17 @@
           <button type="button" id="timeline-reset-zoom" class="timeline__reset" hidden>reset zoom</button>
           <span class="timeline__cursor-label" id="timeline-cursor-label">now</span>
           <button type="button" id="timeline-reset" class="timeline__reset" hidden>reset</button>
+          <button type="button" id="timeline-play" class="timeline__reset timeline__play" data-state="stopped" title="Play back from cursor (space)" aria-label="Play timeline">▶ play</button>
+          <label class="timeline__speed" title="Playback speed">
+            <span class="visually-hidden">Playback speed</span>
+            <select id="timeline-speed">
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+          </label>
         </div>
       </header>
       <div class="timeline__frame">

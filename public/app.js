@@ -58,6 +58,18 @@ function normalizeName(s) {
   return (s ?? '').trim().toLowerCase();
 }
 
+// Convert a #RRGGBB hex to rgba() with a runtime alpha. Used by the
+// ripple ring which fades out over its lifetime.
+function hexWithAlpha(hex, alpha) {
+  if (typeof hex !== 'string' || hex[0] !== '#' || hex.length !== 7) {
+    return `rgba(212, 165, 116, ${alpha})`;
+  }
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // Synthetic diamond nodes representing facts and preferences on the
 // graph. Anchored facts get a thin edge to their subject entity;
 // unanchored facts float free. Preferences orbit the "You" node.
@@ -450,29 +462,53 @@ class GraphView {
 
   setData(entities, relations) {
     const prev = new Map(this.nodes.map((n) => [n.id, n]));
+    const prevEdgeIds = new Set(this.edges.map((e) => e.id));
     const cx = this.width / 2;
     const cy = this.height / 2;
+    const ripples = liveState.pendingRipples;
     this.nodes = entities.map((e, i) => {
       const old = prev.get(e.id);
       const angle = (i / Math.max(1, entities.length)) * Math.PI * 2;
       const r = Math.min(this.width, this.height) * 0.32;
-      return {
+      const node = {
         ...e,
         x: old?.x ?? e._seedX ?? cx + Math.cos(angle) * r * (0.6 + Math.random() * 0.4),
         y: old?.y ?? e._seedY ?? cy + Math.sin(angle) * r * (0.6 + Math.random() * 0.4),
         vx: 0,
         vy: 0,
         degree: 0,
+        _rippleStart: old?._rippleStart,
       };
+      // Carry the pending ripple onto the new node snapshot. Release
+      // time honours the stagger cursor so bursts shower in over
+      // RIPPLE_WINDOW_MS instead of landing on one frame.
+      if (!old) {
+        const pending = ripples.get(e.id);
+        if (pending && pending.kind === 'node') {
+          node._rippleStart = pending.releaseAt;
+          ripples.delete(e.id);
+        }
+      }
+      return node;
     });
     this.byId = new Map(this.nodes.map((n) => [n.id, n]));
 
     this.edges = relations
-      .map((r) => ({
-        ...r,
-        a: this.byId.get(r.source_entity_id),
-        b: this.byId.get(r.target_entity_id),
-      }))
+      .map((r) => {
+        const edge = {
+          ...r,
+          a: this.byId.get(r.source_entity_id),
+          b: this.byId.get(r.target_entity_id),
+        };
+        if (!prevEdgeIds.has(r.id)) {
+          const pending = ripples.get(r.id);
+          if (pending && pending.kind === 'edge') {
+            edge._rippleStart = pending.releaseAt;
+            ripples.delete(r.id);
+          }
+        }
+        return edge;
+      })
       .filter((e) => e.a && e.b);
 
     for (const e of this.edges) {
@@ -649,6 +685,32 @@ class GraphView {
       return Math.min(1, (now - n._visibleSinceT) / FADE_MS);
     };
 
+    // Replay ripples: if playback is advancing asOfMs forward, fire a
+    // ripple on any node whose creation time just crossed the cursor
+    // this frame. Capped at 6 concurrent so dense/fast playback doesn't
+    // shower — extra crossings silently skip their ripple. Nodes only;
+    // edges lack created_at so they just fade in as their endpoints do.
+    if (this._playbackActive && this.asOfMs != null && this._prevAsOfMs != null && this.asOfMs > this._prevAsOfMs) {
+      const MAX_CONCURRENT = 6;
+      let active = 0;
+      for (const n of this.nodes) {
+        if (n._rippleStart != null && (now - n._rippleStart) < NODE_RIPPLE_DUR_MS) active++;
+      }
+      const lo = this._prevAsOfMs;
+      const hi = this.asOfMs;
+      for (const n of this.nodes) {
+        if (active >= MAX_CONCURRENT) break;
+        if (n._rippleStart != null) continue;
+        const created = this._nodeCreatedMs(n);
+        if (created == null) continue;
+        if (created > lo && created <= hi) {
+          n._rippleStart = now;
+          active++;
+        }
+      }
+    }
+    this._prevAsOfMs = this.asOfMs;
+
     const visible = this.nodes.filter((n) => this._isVisible(n));
     const hasHover = !!this.hoverNode;
     const hasSelected = !!this.selectedId;
@@ -662,15 +724,43 @@ class GraphView {
       ctx.globalAlpha = edgeFade;
       const isFocused = focusId && (e.a.id === focusId || e.b.id === focusId);
       const dimmed = focusId && !isFocused;
+
+      // Draw-in ripple: for new edges, interpolate the endpoint from
+      // source toward target (ease-out), then briefly overshoot the
+      // stroke width before settling.
+      let endX = e.b.x;
+      let endY = e.b.y;
+      let rippleWidth = 0;
+      let rippleStroke = null;
+      if (e._rippleStart != null) {
+        const t = (now - e._rippleStart) / EDGE_RIPPLE_DUR_MS;
+        if (t < 0) {
+          // Not yet released by the stagger — skip drawing so the
+          // edge pops in when its turn comes rather than appearing
+          // inert.
+          continue;
+        } else if (t < 1) {
+          const ease = 1 - Math.pow(1 - t, 3);
+          endX = e.a.x + (e.b.x - e.a.x) * ease;
+          endY = e.a.y + (e.b.y - e.a.y) * ease;
+          // Overshoot curve peaks at t≈0.7, settles back by t=1.
+          rippleWidth = 1.2 * Math.sin(Math.PI * Math.min(1, t * 1.15));
+          rippleStroke = 'rgba(232, 200, 138, 0.95)';
+        } else {
+          e._rippleStart = null;
+        }
+      }
+
       ctx.beginPath();
       ctx.moveTo(e.a.x, e.a.y);
-      ctx.lineTo(e.b.x, e.b.y);
-      ctx.lineWidth = isFocused ? 1.4 : 0.6;
-      ctx.strokeStyle = isFocused
-        ? 'rgba(232, 185, 106, 0.7)'
-        : dimmed
-        ? 'rgba(212, 165, 116, 0.04)'
-        : 'rgba(212, 165, 116, 0.18)';
+      ctx.lineTo(endX, endY);
+      ctx.lineWidth = (isFocused ? 1.4 : 0.6) + rippleWidth;
+      ctx.strokeStyle = rippleStroke
+        ?? (isFocused
+          ? 'rgba(232, 185, 106, 0.7)'
+          : dimmed
+          ? 'rgba(212, 165, 116, 0.04)'
+          : 'rgba(212, 165, 116, 0.18)');
       ctx.stroke();
 
       // Edge label on hover
@@ -698,13 +788,37 @@ class GraphView {
     for (const n of visible) {
       const fade = fadeOf(n);
       ctx.globalAlpha = fade;
-      const r = this._radius(n);
+      const baseR = this._radius(n);
       const isHover = this.hoverNode === n;
       const isSelected = this.selectedId === n.id;
       const isHighlighted = this.searchHighlight.has(n.id);
       const dimmed = focusId && focusId !== n.id && focusedNeighbours && !focusedNeighbours.has(n.id);
       const color = TYPE_COLORS[n.entity_type] || '#8B8170';
       const isDiamond = !!(n.__factNode || n.__prefNode);
+
+      // Node ripple: scale from 0.4 → 1.0 (ease-out) while an expanding
+      // ring in the tier color fades out over NODE_RIPPLE_DUR_MS. Held
+      // in the pre-release window so the stagger can space bursts.
+      let r = baseR;
+      if (n._rippleStart != null) {
+        const t = (now - n._rippleStart) / NODE_RIPPLE_DUR_MS;
+        if (t < 0) {
+          // Still queued for its turn — render nothing so it pops in.
+          continue;
+        } else if (t < 1) {
+          const ease = 1 - Math.pow(1 - t, 3);
+          r = baseR * (0.4 + 0.6 * ease);
+          const ringR = baseR + ease * 18;
+          const ringAlpha = 0.7 * (1 - t);
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, ringR, 0, Math.PI * 2);
+          ctx.strokeStyle = hexWithAlpha(color, ringAlpha);
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        } else {
+          n._rippleStart = null;
+        }
+      }
 
       // Halo for selected / hovered / highlighted
       if (isSelected || isHover || isHighlighted) {
@@ -2557,8 +2671,22 @@ const liveState = {
   reconnectTimer: null,
   refreshTimer: null,
   freshIds: new Set(),
+  // Pending ripples for the canvas: id -> { kind: 'node'|'edge', releaseAt: ms }.
+  // graph.setData consumes these when new ids appear, stamping _rippleStart
+  // so _draw can animate them. Staggered ~80ms apart within a burst so
+  // batch inserts shower in instead of flashing on one frame.
+  pendingRipples: new Map(),
+  staggerCursor: 0,
+  // Rolling counters for the masthead ticker.
+  tickerCounts: { entity: 0, edge: 0, fact: 0, message: 0, preference: 0, trace: 0 },
+  tickerFadeTimer: null,
   manualClose: false,
 };
+
+const RIPPLE_STAGGER_MS = 80;
+const RIPPLE_WINDOW_MS = 250;
+const NODE_RIPPLE_DUR_MS = 650;
+const EDGE_RIPPLE_DUR_MS = 400;
 
 function wsUrl(path) {
   const base = settings.baseUrl || window.location.origin;
@@ -2674,11 +2802,78 @@ function onMemoryEvent(evt) {
     // Clear freshness tag after the flash animation duration.
     setTimeout(() => liveState.freshIds.delete(id), 3500);
   }
+
+  // Queue a canvas ripple for things that end up on the graph. Stagger
+  // by RIPPLE_STAGGER_MS so a burst of events doesn't all flash on the
+  // same frame — spreads them across the 250ms refresh debounce window.
+  const ripple = rippleSpecForEvent(evt);
+  if (ripple) {
+    const now = performance.now();
+    const base = Math.max(now, liveState.staggerCursor);
+    liveState.pendingRipples.set(ripple.id, { kind: ripple.kind, releaseAt: base });
+    liveState.staggerCursor = base + RIPPLE_STAGGER_MS;
+    // Ripples expire if the refresh never materialises the new row.
+    setTimeout(() => liveState.pendingRipples.delete(ripple.id), 5000);
+  }
+
+  bumpLiveTicker(evt);
+
   if (liveState.refreshTimer) return;
   liveState.refreshTimer = setTimeout(() => {
     liveState.refreshTimer = null;
     void refresh({ silent: true });
-  }, 250);
+  }, RIPPLE_WINDOW_MS);
+}
+
+// Map a server event to the id that will appear in the graph. entity
+// ids land on real nodes; fact/pref ids land on synthetic diamond nodes
+// (prefixed in buildFactNode / buildPrefNode). Relations become edges.
+function rippleSpecForEvent(evt) {
+  const id = evt.payload?.id;
+  if (!id) return null;
+  switch (evt.type) {
+    case 'entity_added':     return { id, kind: 'node' };
+    case 'fact_added':       return { id: `__fact__${id}`, kind: 'node' };
+    case 'preference_added': return { id: `__pref__${id}`, kind: 'node' };
+    case 'relation_added':   return { id, kind: 'edge' };
+    default:                 return null;
+  }
+}
+
+// Rolling 2s accumulator shown next to the live dot. Resets after a
+// pause so the counter doesn't grow unbounded on long sessions.
+function bumpLiveTicker(evt) {
+  const c = liveState.tickerCounts;
+  switch (evt.type) {
+    case 'entity_added':     c.entity += 1; break;
+    case 'relation_added':   c.edge += 1; break;
+    case 'fact_added':       c.fact += 1; break;
+    case 'preference_added': c.preference += 1; break;
+    case 'message_added':    c.message += 1; break;
+    case 'trace_completed':  c.trace += 1; break;
+    default: return;
+  }
+  renderLiveTicker();
+  if (liveState.tickerFadeTimer) clearTimeout(liveState.tickerFadeTimer);
+  liveState.tickerFadeTimer = setTimeout(() => {
+    liveState.tickerCounts = { entity: 0, edge: 0, fact: 0, message: 0, preference: 0, trace: 0 };
+    renderLiveTicker();
+  }, 2000);
+}
+
+function renderLiveTicker() {
+  const el = $('#live-ticker');
+  if (!el) return;
+  const c = liveState.tickerCounts;
+  const parts = [];
+  if (c.entity)     parts.push(`+${c.entity} entit${c.entity === 1 ? 'y' : 'ies'}`);
+  if (c.edge)       parts.push(`+${c.edge} edge${c.edge === 1 ? '' : 's'}`);
+  if (c.fact)       parts.push(`+${c.fact} fact${c.fact === 1 ? '' : 's'}`);
+  if (c.preference) parts.push(`+${c.preference} pref${c.preference === 1 ? '' : 's'}`);
+  if (c.message)    parts.push(`+${c.message} msg${c.message === 1 ? '' : 's'}`);
+  if (c.trace)      parts.push(`+${c.trace} trace${c.trace === 1 ? '' : 's'}`);
+  el.textContent = parts.join(' · ');
+  el.dataset.state = parts.length ? 'active' : 'idle';
 }
 
 function bindLiveToggle() {
@@ -3359,11 +3554,109 @@ function applyAsOfCursor(ms) {
 }
 
 function resetAsOfCursor() {
+  stopPlayback();
   state.asOfMs = null;
   graph.setAsOfMs(null);
   timeline?.setCursor(null);
   renderStreamsForAsOf();
   updateCursorReadout();
+}
+
+// ----- Timeline playback ----------------------------------------------------
+//
+// Walks asOfMs from the current cursor (or domain start) toward domain end.
+// Base rate is "full visible domain traversed in 20s" multiplied by the
+// user-selected speed. The cursor/graph updates every RAF; streams re-render
+// is throttled to 5Hz because it's a full DOM rebuild per call.
+const PLAYBACK_BASE_DURATION_MS = 20_000;
+const STREAMS_THROTTLE_MS = 200;
+
+const playbackState = {
+  raf: null,
+  lastFrameTs: 0,
+  lastStreamTs: 0,
+  speed: 1,
+};
+
+function togglePlayback() {
+  if (playbackState.raf) stopPlayback();
+  else startPlayback();
+}
+
+function startPlayback() {
+  if (!timeline) return;
+  const domainStart = timeline.fullDomainStart;
+  const domainEnd = timeline.fullDomainEnd;
+  if (!(domainEnd > domainStart)) return;
+
+  // If no cursor set, or cursor at/past end, start from domain start so
+  // the user can "replay from the beginning". Otherwise resume from here.
+  let cursor = state.asOfMs;
+  if (cursor == null || cursor >= domainEnd - 50) cursor = domainStart;
+  // Seed the prev-asOf tracker so the first frame doesn't fire ripples
+  // for every node that was already visible when the user hit play.
+  graph._prevAsOfMs = cursor;
+  graph._playbackActive = true;
+  applyAsOfCursor(cursor);
+  timeline.setCursor(cursor);
+
+  playbackState.lastFrameTs = performance.now();
+  playbackState.lastStreamTs = 0;
+  playbackState.raf = requestAnimationFrame(playbackTick);
+  setPlayButtonState('playing');
+}
+
+function stopPlayback() {
+  if (playbackState.raf) {
+    cancelAnimationFrame(playbackState.raf);
+    playbackState.raf = null;
+  }
+  if (graph) {
+    graph._playbackActive = false;
+    graph._prevAsOfMs = null;
+  }
+  setPlayButtonState('stopped');
+}
+
+function playbackTick(frameTs) {
+  if (!timeline) { stopPlayback(); return; }
+  const dt = frameTs - playbackState.lastFrameTs;
+  playbackState.lastFrameTs = frameTs;
+
+  const span = timeline.fullDomainEnd - timeline.fullDomainStart;
+  if (!(span > 0)) { stopPlayback(); return; }
+  const msPerMs = (span / PLAYBACK_BASE_DURATION_MS) * playbackState.speed;
+  const next = (state.asOfMs ?? timeline.fullDomainStart) + dt * msPerMs;
+
+  if (next >= timeline.fullDomainEnd) {
+    state.asOfMs = timeline.fullDomainEnd;
+    graph.setAsOfMs(timeline.fullDomainEnd);
+    timeline.setCursor(timeline.fullDomainEnd);
+    renderStreamsForAsOf();
+    updateCursorReadout();
+    stopPlayback();
+    return;
+  }
+
+  state.asOfMs = next;
+  graph.setAsOfMs(next);
+  timeline.setCursor(next);
+  updateCursorReadout();
+
+  if (frameTs - playbackState.lastStreamTs >= STREAMS_THROTTLE_MS) {
+    playbackState.lastStreamTs = frameTs;
+    renderStreamsForAsOf();
+  }
+
+  playbackState.raf = requestAnimationFrame(playbackTick);
+}
+
+function setPlayButtonState(mode) {
+  const btn = $('#timeline-play');
+  if (!btn) return;
+  btn.dataset.state = mode;
+  btn.textContent = mode === 'playing' ? '❚❚ pause' : '▶ play';
+  btn.setAttribute('aria-label', mode === 'playing' ? 'Pause timeline' : 'Play timeline');
 }
 
 function updateCursorReadout() {
@@ -3416,6 +3709,31 @@ function bindTimelineReset() {
   if (zoomBtn) zoomBtn.addEventListener('click', () => timeline?.resetZoom());
 }
 
+function bindTimelinePlayback() {
+  const btn = $('#timeline-play');
+  if (btn) btn.addEventListener('click', togglePlayback);
+
+  const speed = $('#timeline-speed');
+  if (speed) {
+    speed.addEventListener('change', () => {
+      const v = parseFloat(speed.value);
+      if (Number.isFinite(v) && v > 0) playbackState.speed = v;
+    });
+  }
+
+  // Space toggles when focus isn't in an input or contenteditable.
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== ' ' && e.code !== 'Space') return;
+    const t = e.target;
+    if (t instanceof HTMLElement) {
+      const tag = t.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
+    }
+    e.preventDefault();
+    togglePlayback();
+  });
+}
+
 function updateZoomReadout(range) {
   const label = $('#timeline-zoom-range');
   const btn = $('#timeline-reset-zoom');
@@ -3462,10 +3780,15 @@ async function init() {
   graph.onSelect = selectEntity;
   graph.onDeselect = deselectEntity;
   timeline = new TimelineView($('#timeline'));
-  timeline.onCursorChange = applyAsOfCursor;
+  timeline.onCursorChange = (ms) => {
+    // Any manual scrub stops an active playback — the user is taking over.
+    stopPlayback();
+    applyAsOfCursor(ms);
+  };
   timeline.onPickItem = onTimelinePick;
   timeline.onZoomChange = updateZoomReadout;
   bindTimelineReset();
+  bindTimelinePlayback();
   bindStatsCollapse();
   bindSectionCollapse('#activity-overlay', '.activity-overlay__head', 'observatory.activity.expanded.v1', true);
   bindActivitySize();
