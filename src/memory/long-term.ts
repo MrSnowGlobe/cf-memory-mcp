@@ -629,13 +629,29 @@ export class LongTermMemory {
     limit: number = 10
   ): Promise<SearchResult[]> {
     const embedding = await getEmbedding(query, this.env.AI);
-    return cascadingSearch(
+    // Pull a wider candidate set so the post-filter for expired facts
+    // doesn't cause us to return fewer rows than `limit` when the top
+    // matches happen to be stale.
+    const candidates = await cascadingSearch(
       this.env.VEC_FACTS,
       embedding,
       this.projectId,
       this.userId,
-      limit
+      limit * 2
     );
+    if (candidates.length === 0) return [];
+
+    // Ask D1 which of these vector ids are still valid, then filter the
+    // SearchResult list in place (preserving score ordering and scope).
+    const placeholders = candidates.map(() => '?').join(', ');
+    const now = new Date().toISOString();
+    const liveRows = await this.env.DB.prepare(
+      `SELECT id FROM facts WHERE id IN (${placeholders}) AND (valid_until IS NULL OR valid_until > ?)`
+    )
+      .bind(...candidates.map((c) => c.id), now)
+      .all<{ id: string }>();
+    const liveIds = new Set(liveRows.results.map((r) => r.id));
+    return candidates.filter((c) => liveIds.has(c.id)).slice(0, limit);
   }
 
   async updateFact(id: string, updates: UpdateFactInput): Promise<FactRow> {

@@ -27,27 +27,16 @@ export const projectScopeMiddleware = createMiddleware<AppType>(async (c, next) 
     path === '/api/v1/atlas';
 
   if (!skipGate && !RESERVED_PROJECTS.has(projectId) && !knownProjects.has(projectId)) {
-    const row = await c.env.DB.prepare(
-      'SELECT id FROM projects WHERE id = ? LIMIT 1'
+    // Auto-provision on first sight, mirroring user-scope middleware. The
+    // CLAUDE.md design contract specifies this; the previous gate-and-404
+    // behaviour was a divergence that broke fresh deploys and the MCP
+    // path (which has no way to call POST /api/v1/projects ahead of
+    // time). INSERT OR IGNORE so concurrent first-writes are idempotent.
+    await c.env.DB.prepare(
+      `INSERT OR IGNORE INTO projects (id, display_name) VALUES (?, ?)`
     )
-      .bind(projectId)
-      .first<{ id: string }>();
-
-    if (!row) {
-      return c.json(
-        {
-          error: `Project '${projectId}' is not registered`,
-          code: 'PROJECT_NOT_REGISTERED',
-          project_id: projectId,
-          hint:
-            `Register it first: POST /api/v1/projects with ` +
-            `{"id":"${projectId}","display_name":"<readable name>"}. ` +
-            `The 'default' project is always available.`,
-        },
-        404
-      );
-    }
-
+      .bind(projectId, projectId)
+      .run();
     knownProjects.add(projectId);
   }
 

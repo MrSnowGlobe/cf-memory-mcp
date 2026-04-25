@@ -33,6 +33,21 @@ app.onError((err, c) => {
   if (message.includes('UNIQUE constraint')) {
     return c.json({ error: 'Resource already exists' }, 409);
   }
+  // Workers AI throws plain Errors when its capacity bucket empties; a
+  // burst against an embed-heavy route surfaces 60+ of these per second.
+  // Map them to 429 with Retry-After so callers can back off; otherwise
+  // the existing fallthrough returns 500 and a polite client retries
+  // forever.
+  if (
+    message.includes('rate limit') ||
+    message.includes('rate-limited') ||
+    message.includes('rate limited') ||
+    message.includes('Capacity temporarily exceeded') ||
+    message.includes('AbortError') && message.includes('AI')
+  ) {
+    c.header('Retry-After', '10');
+    return c.json({ error: 'AI capacity exceeded — back off and retry', code: 'AI_RATE_LIMITED' }, 429);
+  }
   console.error('[router] unhandled error:', err);
   return c.json({ error: 'Internal server error' }, 500);
 });
