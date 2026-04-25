@@ -17,7 +17,8 @@ export function getWriteNamespace(projectId: string, userId: string): string {
 }
 
 /**
- * Insert a vector into a project-namespaced index.
+ * Insert a vector into a project-namespaced index. Errors on duplicate id;
+ * use vectorUpsert for replace-on-existing semantics.
  */
 export async function vectorInsert(
   index: VectorizeIndex,
@@ -27,6 +28,21 @@ export async function vectorInsert(
   metadata?: Record<string, string>
 ): Promise<void> {
   await index.insert([{ id, values, namespace, metadata }]);
+}
+
+/**
+ * Upsert a vector — replaces the existing row if the id already exists.
+ * Used by paths that re-embed an existing record (e.g. completeTrace
+ * refreshing a startTrace placeholder with richer metadata).
+ */
+export async function vectorUpsert(
+  index: VectorizeIndex,
+  id: string,
+  values: number[],
+  namespace: string,
+  metadata?: Record<string, string>
+): Promise<void> {
+  await index.upsert([{ id, values, namespace, metadata }]);
 }
 
 /**

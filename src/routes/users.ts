@@ -36,4 +36,20 @@ app.get('/api/v1/users', async (c) => {
   return c.json(result.results);
 });
 
+// Single-user lookup — users are global (no project_id column), so this
+// route is intentionally not project-scoped. Mirrors POST semantics so a
+// caller doing read-after-write doesn't see ghost-not-found.
+app.get('/api/v1/users/:id', async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare(
+    'SELECT id, display_name, created_at, metadata FROM users WHERE id = ?'
+  )
+    .bind(id)
+    .first();
+  if (!row) {
+    return c.json({ error: `User '${id}' not found` }, 404);
+  }
+  return c.json(row);
+});
+
 export default app;

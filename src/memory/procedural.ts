@@ -17,7 +17,7 @@ import { NotFoundError } from '../utils/errors';
 import { parsePagination } from '../utils/pagination';
 import { getEmbedding } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
-import { vectorInsert, cascadingSearch, getWriteNamespace } from '../services/vectorize';
+import { vectorInsert, vectorUpsert, cascadingSearch, getWriteNamespace } from '../services/vectorize';
 import { publishEvent } from '../services/events';
 
 export interface StepWithCalls extends StepRow {
@@ -128,9 +128,12 @@ export class ProceduralMemory {
     // pending vector that startTrace inserted. Skip if outcome is empty.
     const embedText = outcome ? `${trace.task}\n${outcome}` : trace.task;
     const embedding = await getEmbedding(embedText, this.env.AI);
-    await vectorInsert(this.env.VEC_TRACES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
+    await vectorUpsert(this.env.VEC_TRACES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
       task: trace.task,
       success: String(success),
+      duration_ms: String(durationMs),
+      outcome: outcome.slice(0, 200),
+      completed_at: completedAt,
     });
 
     // 5. Return the updated trace

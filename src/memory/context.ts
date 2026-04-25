@@ -153,9 +153,9 @@ export async function buildContext(
 
   // Known Entities
   if (entities.length > 0) {
-    const lines = entities.map(({ row }) => {
+    const lines = entities.map(({ row, scopeLevel }) => {
       const desc = row.description ? `: ${row.description}` : '';
-      return `- ${row.name} (${row.entity_type})${desc}`;
+      return `- ${row.name} (${row.entity_type})${scopeLabel(scopeLevel)}${desc}`;
     });
     sections.push(`## Known Entities\n${lines.join('\n')}`);
   }
@@ -179,21 +179,18 @@ export async function buildContext(
 
   // Preferences
   if (preferences.length > 0) {
-    const lines = preferences.map(({ row }) => {
+    const lines = preferences.map(({ row, scopeLevel }) => {
       const ctx = row.context ? ` (context: ${row.context})` : '';
-      return `- ${row.category}: ${row.preference}${ctx}`;
+      return `- ${row.category}: ${row.preference}${scopeLabel(scopeLevel)}${ctx}`;
     });
     sections.push(`## Preferences\n${lines.join('\n')}`);
   }
 
-  // Relevant Facts (exclude expired)
-  const now = new Date().toISOString();
-  const activeFacts = facts.filter(
-    ({ row }) => !row.valid_until || row.valid_until > now
-  );
-  if (activeFacts.length > 0) {
-    const lines = activeFacts.map(
-      ({ row }) => `- ${row.subject} ${row.predicate} ${row.object}`
+  // Relevant Facts — hydrateFacts already filters expired at the SQL
+  // boundary, so any row here is current.
+  if (facts.length > 0) {
+    const lines = facts.map(
+      ({ row, scopeLevel }) => `- ${row.subject} ${row.predicate} ${row.object}${scopeLabel(scopeLevel)}`
     );
     sections.push(`## Relevant Facts\n${lines.join('\n')}`);
   }
@@ -274,6 +271,19 @@ function buildInClause(ids: string[]): { placeholders: string; bindings: string[
 interface Hydrated<T> {
   row: T;
   score: number;
+  scopeLevel?: number; // 0=project+user, 1=user, 2=project, 3=global
+}
+
+// Decorate cross-scope hits so a model consuming the context block can
+// tell project-local fact "X" apart from a global trivia hit ranked into
+// the same query. Empty for the most-specific (project+user) scope.
+function scopeLabel(level?: number): string {
+  switch (level) {
+    case 1: return ' (user-scope)';
+    case 2: return ' (project-scope)';
+    case 3: return ' (global)';
+    default: return '';
+  }
 }
 
 async function hydrateMessages(
@@ -337,11 +347,16 @@ async function hydrateFacts(
 ): Promise<Hydrated<FactRow>[]> {
   if (results.length === 0) return [];
   const { placeholders, bindings } = buildInClause(results.map((r) => r.id));
+  const now = new Date().toISOString();
+  // Defence in depth: searchFacts already drops expired hits, but
+  // contextBuilder calls hydrateFacts on independently-cascaded results
+  // too. Keep the temporal filter at the SQL boundary so no path leaks
+  // expired facts into the formatted context.
   const rows = await safe('hydrate_facts', async () => {
     const res = await env.DB.prepare(
-      `SELECT * FROM facts WHERE id IN (${placeholders})`
+      `SELECT * FROM facts WHERE id IN (${placeholders}) AND (valid_until IS NULL OR valid_until > ?)`
     )
-      .bind(...bindings)
+      .bind(...bindings, now)
       .all<FactRow>();
     return res.results;
   });
@@ -402,17 +417,17 @@ function joinWithScores<T>(
   results: SearchResult[],
   getKey: (row: T) => string
 ): Hydrated<T>[] {
-  const scoreMap = new Map<string, number>();
+  const meta = new Map<string, { score: number; scopeLevel?: number }>();
   for (const r of results) {
-    scoreMap.set(r.id, r.score);
+    meta.set(r.id, { score: r.score, scopeLevel: r.scopeLevel });
   }
 
   const hydrated: Hydrated<T>[] = [];
   for (const row of rows) {
     const key = getKey(row);
-    const score = scoreMap.get(key);
-    if (score !== undefined) {
-      hydrated.push({ row, score });
+    const m = meta.get(key);
+    if (m !== undefined) {
+      hydrated.push({ row, score: m.score, scopeLevel: m.scopeLevel });
     }
   }
 

@@ -86,7 +86,10 @@ describe('scope middleware — query param fallback', () => {
     expect(row.user_id).toBe('h-user-both');
   });
 
-  it('rejects unregistered project IDs with 404 and registration hint', async () => {
+  it('auto-creates the project on first write with an unregistered ID', async () => {
+    // Mirror user-scope's INSERT OR IGNORE so a fresh deploy or MCP
+    // client (which has no way to call POST /api/v1/projects ahead of
+    // time) can write straight away. CLAUDE.md is the contract.
     const res = await app.request(
       '/api/v1/sessions',
       {
@@ -94,17 +97,23 @@ describe('scope middleware — query param fallback', () => {
         headers: {
           'Authorization': 'Bearer test-token',
           'Content-Type': 'application/json',
-          'X-Project-Id': 'never-registered-xyz',
+          'X-Project-Id': 'auto-created-xyz',
           'X-User-Id': 'default',
         },
-        body: JSON.stringify({ id: 'sess-unknown' }),
+        body: JSON.stringify({ id: 'sess-auto' }),
       },
       testEnv
     );
-    expect(res.status).toBe(404);
-    const body = (await res.json()) as { code: string; project_id: string };
-    expect(body.code).toBe('PROJECT_NOT_REGISTERED');
-    expect(body.project_id).toBe('never-registered-xyz');
+    expect(res.status).toBe(201);
+    const row = (await res.json()) as { project_id: string };
+    expect(row.project_id).toBe('auto-created-xyz');
+    // Confirm the project row landed in D1.
+    const projectRow = await testEnv.DB.prepare(
+      'SELECT id FROM projects WHERE id = ?'
+    )
+      .bind('auto-created-xyz')
+      .first<{ id: string }>();
+    expect(projectRow?.id).toBe('auto-created-xyz');
   });
 
   it('defaults to "default" when neither header nor query is provided', async () => {
