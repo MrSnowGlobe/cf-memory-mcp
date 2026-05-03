@@ -115,47 +115,43 @@ export class ShortTermMemory {
     content: string,
     metadata?: Record<string, unknown>
   ): Promise<MessageRow> {
-    const session = await this.getSession(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session ${sessionId}`);
-    }
-
     const id = generateId();
     const now = new Date().toISOString();
     const metaJson = JSON.stringify(metadata ?? {});
-    const embedding = await getEmbedding(content, this.env.AI);
 
-    const sequenceNum = await this.insertMessageWithRetry(
-      id,
-      sessionId,
-      role,
-      content,
-      metaJson,
-      now
-    );
+    // Embedding and the scoped insert are independent — run in parallel
+    // so Workers AI latency overlaps with D1.
+    const [embedding, sequenceNum] = await Promise.all([
+      getEmbedding(content, this.env.AI),
+      this.insertMessageScoped(id, sessionId, role, content, metaJson, now),
+    ]);
 
+    // Vector insert, session bump, and cache invalidation are independent — fan out.
     try {
-      await vectorInsert(this.env.VEC_MESSAGES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
-        session_id: sessionId,
-        role,
-      });
+      await Promise.all([
+        vectorInsert(
+          this.env.VEC_MESSAGES,
+          id,
+          embedding,
+          getWriteNamespace(this.projectId, this.userId),
+          { session_id: sessionId, role }
+        ),
+        this.env.DB.prepare(
+          'UPDATE sessions SET updated_at = ? WHERE id = ?'
+        )
+          .bind(now, sessionId)
+          .run(),
+        cacheDelete(
+          this.env.CACHE,
+          this.projectId,
+          this.userId,
+          `session:${sessionId}:recent`
+        ),
+      ]);
     } catch (err) {
-      console.error('[short-term] vector insert failed for message', id, err);
+      console.error('[short-term] post-insert side-effects failed for message', id, err);
       throw err;
     }
-
-    await this.env.DB.prepare(
-      'UPDATE sessions SET updated_at = ? WHERE id = ?'
-    )
-      .bind(now, sessionId)
-      .run();
-
-    await cacheDelete(
-      this.env.CACHE,
-      this.projectId,
-      this.userId,
-      `session:${sessionId}:recent`
-    );
 
     const row: MessageRow = {
       id,
@@ -181,13 +177,8 @@ export class ShortTermMemory {
     sessionId: string,
     limit: number = 50
   ): Promise<MessageRow[]> {
-    // Verify session belongs to this project
-    const session = await this.getSession(sessionId);
-    if (!session) {
-      throw new NotFoundError(`Session ${sessionId}`);
-    }
-
-    // 1. Try KV cache first
+    // Cache key is already prefixed with {projectId}:{userId}:, so a hit
+    // is implicitly scope-validated. Skip the D1 session lookup on the hot path.
     const cacheKey = `session:${sessionId}:recent`;
     const cached = await cacheGet<MessageRow[]>(
       this.env.CACHE,
@@ -200,18 +191,24 @@ export class ShortTermMemory {
       return cached;
     }
 
-    // 2. Query D1
-    const result = await this.env.DB.prepare(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY sequence_num ASC LIMIT ?'
-    )
-      .bind(sessionId, limit)
-      .all<MessageRow>();
+    // Cache miss: validate session ownership and load from D1 in parallel.
+    // If validation fails we throw and the (possibly empty) D1 read is wasted —
+    // acceptable cost since the hot path is the cache hit above.
+    const [session, result] = await Promise.all([
+      this.getSession(sessionId),
+      this.env.DB.prepare(
+        'SELECT * FROM messages WHERE session_id = ? ORDER BY sequence_num ASC LIMIT ?'
+      )
+        .bind(sessionId, limit)
+        .all<MessageRow>(),
+    ]);
+
+    if (!session) {
+      throw new NotFoundError(`Session ${sessionId}`);
+    }
 
     const messages = result.results;
-
-    // 3. Cache the result with 60-second TTL
     await cacheSet(this.env.CACHE, this.projectId, this.userId, cacheKey, messages, 60);
-
     return messages;
   }
 
@@ -325,7 +322,12 @@ export class ShortTermMemory {
     );
   }
 
-  private async insertMessageWithRetry(
+  // Atomic insert that computes sequence_num and validates session scope in a
+  // single statement. The MAX subquery runs under SQLite's write lock so the
+  // value is fresh; the scoped JOIN ensures the session belongs to this
+  // project+user (no separate getSession round-trip needed). On UNIQUE
+  // collision (rare contention), we retry once.
+  private async insertMessageScoped(
     id: string,
     sessionId: string,
     role: string,
@@ -333,31 +335,37 @@ export class ShortTermMemory {
     metaJson: string,
     now: string
   ): Promise<number> {
-    const MAX_ATTEMPTS = 5;
+    const MAX_ATTEMPTS = 3;
+    let lastErr: unknown = null;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const seqResult = await this.env.DB.prepare(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM messages WHERE session_id = ?'
-      )
-        .bind(sessionId)
-        .first<{ next_seq: number }>();
-
-      const sequenceNum = seqResult?.next_seq ?? 1;
-
       try {
-        await this.env.DB.prepare(
-          'INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        const result = await this.env.DB.prepare(
+          `INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id)
+           SELECT ?, s.id, ?, ?, ?, ?,
+                  COALESCE((SELECT MAX(sequence_num) FROM messages WHERE session_id = s.id), 0) + 1,
+                  ?
+           FROM sessions s
+           WHERE s.id = ? AND s.project_id = ? AND s.user_id = ?
+           RETURNING sequence_num`
         )
-          .bind(id, sessionId, role, content, metaJson, now, sequenceNum, id)
-          .run();
-        return sequenceNum;
+          .bind(id, role, content, metaJson, now, id, sessionId, this.projectId, this.userId)
+          .first<{ sequence_num: number }>();
+
+        if (!result) {
+          throw new NotFoundError(`Session ${sessionId}`);
+        }
+        return result.sequence_num;
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('UNIQUE constraint') && attempt < MAX_ATTEMPTS - 1) {
+          lastErr = err;
           continue;
         }
         throw err;
       }
     }
-    throw new Error(`Failed to insert message after ${MAX_ATTEMPTS} attempts`);
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error(`Failed to insert message after ${MAX_ATTEMPTS} attempts`);
   }
 }
