@@ -19,6 +19,7 @@ import {
   getWriteNamespace,
 } from '../services/vectorize';
 import { publishEvent } from '../services/events';
+import { logError } from '../services/logger';
 
 export class ShortTermMemory {
   constructor(
@@ -165,7 +166,13 @@ export class ShortTermMemory {
       if (!this.waitUntil) critical.push(sessionBump);
       await Promise.all(critical);
     } catch (err) {
-      console.error('[short-term] post-insert side-effects failed for message', id, err);
+      logError('post_insert_side_effect_failed', err, {
+        component: 'short-term',
+        message_id: id,
+        session_id: sessionId,
+        project_id: this.projectId,
+        user_id: this.userId,
+      });
       throw err;
     }
 

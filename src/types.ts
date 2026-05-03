@@ -34,6 +34,8 @@ export interface RateLimit {
 export type Variables = {
   projectId: string;
   userId: string;
+  /** Per-request correlation id, set by request-log middleware. */
+  requestId: string;
 };
 
 // Hono app type — used for all route definitions

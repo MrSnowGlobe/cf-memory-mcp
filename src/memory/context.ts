@@ -14,6 +14,7 @@ import { LongTermMemory } from './long-term';
 import { ProceduralMemory } from './procedural';
 import { getEmbeddingCached } from '../services/embeddings';
 import { traverseRelations } from '../services/graph';
+import { logError } from '../services/logger';
 import { GRAPH } from '../config';
 
 /** Default limits for each memory section when not specified by caller. */
@@ -269,17 +270,12 @@ async function safeOnce<T>(
   } catch (err: unknown) {
     const name = err instanceof Error ? err.constructor.name : 'UnknownError';
     const message = err instanceof Error ? err.message : String(err);
-    console.error(
-      JSON.stringify({
-        level: 'error',
-        component: 'context',
-        source,
-        project_id: projectId,
-        user_id: userId,
-        error: name,
-        message,
-      })
-    );
+    logError('context_subquery_failed', err, {
+      component: 'context',
+      source,
+      project_id: projectId,
+      user_id: userId,
+    });
     errors.push({ source, message: `${name}: ${message}` });
     return null;
   }
@@ -302,17 +298,12 @@ function makeSafeQuery(
     } catch (err: unknown) {
       const name = err instanceof Error ? err.constructor.name : 'UnknownError';
       const message = err instanceof Error ? err.message : String(err);
-      console.error(
-        JSON.stringify({
-          level: 'error',
-          component: 'context',
-          source,
-          project_id: projectId,
-          user_id: userId,
-          error: name,
-          message,
-        })
-      );
+      logError('context_subquery_failed', err, {
+        component: 'context',
+        source,
+        project_id: projectId,
+        user_id: userId,
+      });
       errors.push({ source, message: `${name}: ${message}` });
       return [];
     }

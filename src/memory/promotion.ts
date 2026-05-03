@@ -2,6 +2,7 @@ import type { Bindings, EntityRow, PreferenceRow, FactRow } from '../types';
 import { generateId } from '../utils/ids';
 import { vectorInsert } from '../services/vectorize';
 import { publishEvent } from '../services/events';
+import { logWarn } from '../services/logger';
 
 type PromotionType = 'entity' | 'preference' | 'fact';
 type PromotionTarget = 'user' | 'global';
@@ -195,7 +196,10 @@ async function copyVector(
 
   const [existing] = await index.getByIds([sourceVectorId]);
   if (!existing) {
-    console.error(`[promotion] source vector ${sourceVectorId} missing from Vectorize`);
+    logWarn('promotion_source_vector_missing', {
+      component: 'promotion',
+      source_vector_id: sourceVectorId,
+    });
     return;
   }
 
