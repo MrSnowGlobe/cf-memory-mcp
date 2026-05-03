@@ -68,33 +68,35 @@ export class LongTermMemory {
     const now = new Date().toISOString();
     const metaJson = JSON.stringify(input.metadata ?? {});
 
-    // 3. Generate embedding
-    const embedding = await getEmbedding(
-      entityEmbeddingText(input.name, input.description ?? null),
-      this.env.AI
-    );
-
-    // 4. Insert into D1
-    await this.env.DB.prepare(
-      `INSERT INTO entities (id, project_id, user_id, name, entity_type, subtype, description, metadata, created_at, updated_at, vector_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        id,
-        this.projectId,
-        this.userId,
-        input.name,
-        input.entity_type,
-        input.subtype ?? null,
-        input.description ?? null,
-        metaJson,
-        now,
-        now,
-        id
+    // Run the embedding call in parallel with the D1 insert: the insert
+    // doesn't depend on the embedding (vector_id is just our generated id),
+    // so we can overlap the Workers AI latency with the D1 write.
+    const [embedding] = await Promise.all([
+      getEmbedding(
+        entityEmbeddingText(input.name, input.description ?? null),
+        this.env.AI
+      ),
+      this.env.DB.prepare(
+        `INSERT INTO entities (id, project_id, user_id, name, entity_type, subtype, description, metadata, created_at, updated_at, vector_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run();
+        .bind(
+          id,
+          this.projectId,
+          this.userId,
+          input.name,
+          input.entity_type,
+          input.subtype ?? null,
+          input.description ?? null,
+          metaJson,
+          now,
+          now,
+          id
+        )
+        .run(),
+    ]);
 
-    // 5. Insert vector into Vectorize with scoped namespace
+    // Insert vector into Vectorize with scoped namespace
     await vectorInsert(this.env.VEC_ENTITIES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
       entity_type: input.entity_type,
       name: input.name,
@@ -343,31 +345,31 @@ export class LongTermMemory {
     const metaJson = JSON.stringify(input.metadata ?? {});
     const confidence = input.confidence ?? 1.0;
 
-    // Generate embedding
-    const embedding = await getEmbedding(
-      preferenceEmbeddingText(input.category, input.preference, input.context ?? null),
-      this.env.AI
-    );
-
-    // Insert into D1
-    await this.env.DB.prepare(
-      `INSERT INTO preferences (id, project_id, user_id, category, preference, context, confidence, metadata, created_at, updated_at, vector_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        id,
-        this.projectId,
-        this.userId,
-        input.category,
-        input.preference,
-        input.context ?? null,
-        confidence,
-        metaJson,
-        now,
-        now,
-        id
+    // Embedding + D1 insert in parallel (insert doesn't depend on the embedding).
+    const [embedding] = await Promise.all([
+      getEmbedding(
+        preferenceEmbeddingText(input.category, input.preference, input.context ?? null),
+        this.env.AI
+      ),
+      this.env.DB.prepare(
+        `INSERT INTO preferences (id, project_id, user_id, category, preference, context, confidence, metadata, created_at, updated_at, vector_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run();
+        .bind(
+          id,
+          this.projectId,
+          this.userId,
+          input.category,
+          input.preference,
+          input.context ?? null,
+          confidence,
+          metaJson,
+          now,
+          now,
+          id
+        )
+        .run(),
+    ]);
 
     // Insert vector into Vectorize with scoped namespace
     await vectorInsert(
@@ -534,33 +536,33 @@ export class LongTermMemory {
     const metaJson = JSON.stringify(input.metadata ?? {});
     const confidence = input.confidence ?? 1.0;
 
-    // Generate embedding
-    const embedding = await getEmbedding(
-      factEmbeddingText(input.subject, input.predicate, input.object),
-      this.env.AI
-    );
-
-    // Insert into D1
-    await this.env.DB.prepare(
-      `INSERT INTO facts (id, project_id, user_id, subject, predicate, object, valid_from, valid_until, confidence, source, metadata, created_at, vector_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        id,
-        this.projectId,
-        this.userId,
-        input.subject,
-        input.predicate,
-        input.object,
-        input.valid_from ?? null,
-        input.valid_until ?? null,
-        confidence,
-        input.source ?? null,
-        metaJson,
-        now,
-        id
+    // Embedding + D1 insert in parallel (insert doesn't depend on the embedding).
+    const [embedding] = await Promise.all([
+      getEmbedding(
+        factEmbeddingText(input.subject, input.predicate, input.object),
+        this.env.AI
+      ),
+      this.env.DB.prepare(
+        `INSERT INTO facts (id, project_id, user_id, subject, predicate, object, valid_from, valid_until, confidence, source, metadata, created_at, vector_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run();
+        .bind(
+          id,
+          this.projectId,
+          this.userId,
+          input.subject,
+          input.predicate,
+          input.object,
+          input.valid_from ?? null,
+          input.valid_until ?? null,
+          confidence,
+          input.source ?? null,
+          metaJson,
+          now,
+          id
+        )
+        .run(),
+    ]);
 
     // Insert vector into Vectorize with scoped namespace
     await vectorInsert(this.env.VEC_FACTS, id, embedding, getWriteNamespace(this.projectId, this.userId), {

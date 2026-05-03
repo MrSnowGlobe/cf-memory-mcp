@@ -77,11 +77,23 @@ export async function resolveEntity(
     .bind(entityType, projectId, userId, RESOLUTION.fuzzyCandidateLimit)
     .all<EntityRow>();
 
+  // Cheap prefilter: a Levenshtein similarity >= threshold requires the two
+  // strings to differ in length by at most (1 - threshold) * max(len). Skipping
+  // candidates that fail this bound avoids the per-character distance loop on
+  // names that can't possibly match.
+  const queryLen = name.length;
+  const maxLenDiffRatio = 1 - RESOLUTION.fuzzyThreshold;
+
   let bestFuzzy: EntityRow | null = null;
   let bestFuzzyScore = 0;
   let bestFuzzyPriority = 4;
 
   for (const candidate of candidates.results) {
+    const candLen = candidate.name.length;
+    const lenMax = Math.max(queryLen, candLen);
+    if (lenMax === 0) continue;
+    if (Math.abs(queryLen - candLen) / lenMax > maxLenDiffRatio) continue;
+
     const score = fuzzyMatch(name, candidate.name);
     if (score >= RESOLUTION.fuzzyThreshold) {
       const priority = scopePriority(candidate, projectId, userId);
