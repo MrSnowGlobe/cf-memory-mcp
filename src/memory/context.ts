@@ -12,7 +12,7 @@ import type {
 import { ShortTermMemory } from './short-term';
 import { LongTermMemory } from './long-term';
 import { ProceduralMemory } from './procedural';
-import { getEmbedding } from '../services/embeddings';
+import { getEmbeddingCached } from '../services/embeddings';
 import { traverseRelations } from '../services/graph';
 import { GRAPH } from '../config';
 
@@ -68,7 +68,7 @@ export async function buildContext(
   // 5 redundant calls per buildContext for an embedding that's identical
   // every time (same string, same model).
   const queryEmbedding = await safeOnce('query_embedding', errors, projectId, userId, () =>
-    getEmbedding(input.query, env.AI)
+    getEmbeddingCached(input.query, env.AI, env.CACHE)
   );
 
   // ------------------------------------------------------------------

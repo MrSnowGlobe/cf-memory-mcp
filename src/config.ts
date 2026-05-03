@@ -22,6 +22,10 @@ export const CASCADE_BOOSTS = {
 export const CACHE_TTL = {
   conversationSeconds: 60,
   toolStatsSeconds: 300,
+  // Embeddings are deterministic per (model, input) so they can stay
+  // cached for a long time. Invalidates implicitly on model change
+  // because the cache key includes the model id.
+  embeddingSeconds: 86_400,
 } as const;
 
 export const SSE = {

@@ -9,7 +9,7 @@ import type { AddMessageInput } from '../utils/validation';
 import { generateId } from '../utils/ids';
 import { NotFoundError } from '../utils/errors';
 import { parsePagination } from '../utils/pagination';
-import { getEmbedding, getEmbeddings } from '../services/embeddings';
+import { getEmbedding, getEmbeddings, getEmbeddingCached } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
 import {
   vectorInsert,
@@ -334,8 +334,11 @@ export class ShortTermMemory {
     const limit = opts?.limit ?? 10;
     // Callers that bulk-search across memory types (e.g. buildContext)
     // can pass a precomputed embedding to share one Workers AI call
-    // across all queries against the same query string.
-    const embedding = opts?.embedding ?? (await getEmbedding(query, this.env.AI));
+    // across all queries; standalone callers fall through to the
+    // KV-backed cache so repeat queries skip Workers AI altogether.
+    const embedding =
+      opts?.embedding ??
+      (await getEmbeddingCached(query, this.env.AI, this.env.CACHE));
 
     const filter = opts?.sessionId ? { session_id: opts.sessionId } : undefined;
 

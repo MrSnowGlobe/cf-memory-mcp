@@ -1,5 +1,5 @@
 import type { Bindings, EntityRow } from '../types';
-import { getEmbedding } from './embeddings';
+import { getEmbeddingCached } from './embeddings';
 import { cascadingSearch } from './vectorize';
 import { RESOLUTION } from '../config';
 import { distance } from 'fastest-levenshtein';
@@ -114,7 +114,7 @@ export async function resolveEntity(
   }
 
   // Stage 3 — Semantic match via Vectorize
-  const embedding = await getEmbedding(name, env.AI);
+  const embedding = await getEmbeddingCached(name, env.AI, env.CACHE);
   const searchResults = await cascadingSearch(
     env.VEC_ENTITIES,
     embedding,
