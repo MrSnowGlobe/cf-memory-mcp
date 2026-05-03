@@ -232,6 +232,50 @@ describe('ShortTermMemory', () => {
         ])
       ).rejects.toThrow(/not found/);
     });
+
+    it('assigns contiguous sequence numbers when batches and singles interleave', async () => {
+      // Regression: pre-fix, addMessagesBatch read MAX(sequence_num) once
+      // up front and incremented in JS, so any single addMessage that landed
+      // mid-batch (or another concurrent batch) collided on UNIQUE. With
+      // inline MAX inside each statement, every insert observes prior writes.
+      const stm = new ShortTermMemory(testEnv, PROJECT_ID, 'default');
+      await stm.createSession('sess-interleave');
+
+      // Seed three single-message inserts so the batch starts from a non-zero MAX.
+      await stm.addMessage('sess-interleave', 'user', 'pre-1');
+      await stm.addMessage('sess-interleave', 'user', 'pre-2');
+      await stm.addMessage('sess-interleave', 'user', 'pre-3');
+
+      // Two concurrent batches on the same session — the buggy version
+      // would resolve max=3 in both, both would try to insert seqs 4..N,
+      // and the second would fail UNIQUE.
+      const batchA = Array.from({ length: 5 }, (_, k) => ({
+        role: 'user' as const,
+        content: `A-${k}`,
+      }));
+      const batchB = Array.from({ length: 5 }, (_, k) => ({
+        role: 'user' as const,
+        content: `B-${k}`,
+      }));
+
+      const [countA, countB] = await Promise.all([
+        stm.addMessagesBatch('sess-interleave', batchA),
+        stm.addMessagesBatch('sess-interleave', batchB),
+      ]);
+      expect(countA).toBe(5);
+      expect(countB).toBe(5);
+
+      // Verify all 13 messages have unique, contiguous sequence numbers 1..13.
+      const all = await env.DB.prepare(
+        'SELECT sequence_num FROM messages WHERE session_id = ? ORDER BY sequence_num ASC'
+      )
+        .bind('sess-interleave')
+        .all<{ sequence_num: number }>();
+
+      expect(all.results).toHaveLength(13);
+      const seqs = all.results.map((r) => r.sequence_num);
+      expect(seqs).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    });
   });
 
   describe('searchMessages', () => {
