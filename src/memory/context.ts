@@ -121,14 +121,27 @@ export async function buildContext(
   ]);
 
   // ------------------------------------------------------------------
-  // 2. Hydrate search results by looking up full D1 rows
+  // 2. Hydrate search results, and (in parallel) fan out neighbor
+  //    traversal for the top-ranked entity ids. Neighbors only need ids
+  //    — already present in entityResults — so traversal doesn't have
+  //    to wait for hydration to finish.
   // ------------------------------------------------------------------
-  const [messages, entities, preferences, facts, traces] = await Promise.all([
+  const topRootIds = entityResults
+    .slice(0, GRAPH.contextEntitiesToExpand)
+    .map((r) => r.id);
+
+  const neighborsPromise: Promise<NeighborGroup[]> =
+    include.includes('long_term') && topRootIds.length > 0
+      ? fetchNeighborGroupsByIds(env, projectId, userId, topRootIds, safe)
+      : Promise.resolve([]);
+
+  const [messages, entities, preferences, facts, traces, neighborGroups] = await Promise.all([
     hydrateMessages(env, messageResults, safe),
     hydrateEntities(env, entityResults, safe),
     hydratePreferences(env, preferenceResults, safe),
     hydrateFacts(env, factResults, safe),
     hydrateTraces(env, traceResults, safe),
+    neighborsPromise,
   ]);
 
   // ------------------------------------------------------------------
@@ -160,19 +173,23 @@ export async function buildContext(
     sections.push(`## Known Entities\n${lines.join('\n')}`);
   }
 
-  // Related Entities (1-hop graph expansion of the top entities)
-  if (entities.length > 0 && include.includes('long_term')) {
-    const topEntities = entities
-      .slice(0, GRAPH.contextEntitiesToExpand)
-      .map(({ row }) => row);
-    const neighborGroups = await fetchNeighborGroups(env, projectId, userId, topEntities, safe);
-    if (neighborGroups.length > 0) {
-      const groupLines = neighborGroups.map(({ root, neighbors }) => {
-        const items = neighbors
-          .map((n) => `  - ${n.name} (${n.entity_type}, hop ${n.hop_distance})`)
-          .join('\n');
-        return `- ${root.name}:\n${items}`;
-      });
+  // Related Entities (1-hop graph expansion of the top entities). Traversal
+  // already ran in parallel with hydration above; here we only look up
+  // root names from the hydrated entity rows for rendering.
+  if (neighborGroups.length > 0 && entities.length > 0) {
+    const entityById = new Map<string, EntityRow>();
+    for (const { row } of entities) entityById.set(row.id, row);
+
+    const groupLines: string[] = [];
+    for (const { rootId, neighbors } of neighborGroups) {
+      const root = entityById.get(rootId);
+      if (!root) continue;
+      const items = neighbors
+        .map((n) => `  - ${n.name} (${n.entity_type}, hop ${n.hop_distance})`)
+        .join('\n');
+      groupLines.push(`- ${root.name}:\n${items}`);
+    }
+    if (groupLines.length > 0) {
       sections.push(`## Related Entities\n${groupLines.join('\n')}`);
     }
   }
@@ -381,28 +398,34 @@ async function hydrateTraces(
   return joinWithScores(rows, results, (row) => row.id);
 }
 
+interface NeighborGroup {
+  rootId: string;
+  neighbors: NeighborRow[];
+}
+
 /**
- * For each top entity, fetch its 1-hop neighbors. Runs in parallel and
+ * For each top entity id, fetch its 1-hop neighbors. Runs in parallel and
  * skips entities whose traversal returns nothing so the section only
- * appears when there's something to show.
+ * appears when there's something to show. Operates on ids alone so it
+ * can run concurrently with entity hydration.
  */
-async function fetchNeighborGroups(
+async function fetchNeighborGroupsByIds(
   env: Bindings,
   projectId: string,
   userId: string,
-  roots: EntityRow[],
+  rootIds: string[],
   safe: SafeQuery
-): Promise<Array<{ root: EntityRow; neighbors: NeighborRow[] }>> {
-  if (roots.length === 0) return [];
+): Promise<NeighborGroup[]> {
+  if (rootIds.length === 0) return [];
   const groups = await Promise.all(
-    roots.map(async (root) => {
+    rootIds.map(async (rootId) => {
       const neighbors = await safe('neighbor_traversal', () =>
-        traverseRelations(env, root.id, projectId, userId, {
+        traverseRelations(env, rootId, projectId, userId, {
           maxDepth: 1,
           limit: GRAPH.contextNeighborsPerEntity,
         })
       );
-      return { root, neighbors };
+      return { rootId, neighbors };
     })
   );
   return groups.filter((g) => g.neighbors.length > 0);

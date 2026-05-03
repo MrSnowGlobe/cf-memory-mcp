@@ -24,6 +24,7 @@ import {
 } from '../services/embeddings';
 import {
   vectorInsert,
+  vectorUpsert,
   vectorDelete,
   cascadingSearch,
   getWriteNamespace,
@@ -185,7 +186,10 @@ export class LongTermMemory {
       .bind(...bindValues)
       .run();
 
-    // 4. If name or description changed, re-embed and update vector
+    // 4. If name or description changed, re-embed and upsert the vector.
+    // Upsert replaces the row in place — one Vectorize call instead of
+    // delete-then-insert. (vector_id == entity id, so the upsert targets
+    // the same row that the previous insert created.)
     if (updates.name !== undefined || updates.description !== undefined) {
       const newName = updates.name ?? existing.name;
       const newType = updates.entity_type ?? existing.entity_type;
@@ -197,11 +201,7 @@ export class LongTermMemory {
         this.env.AI
       );
 
-      // Delete old vector and insert new one
-      if (existing.vector_id) {
-        await vectorDelete(this.env.VEC_ENTITIES, [existing.vector_id]);
-      }
-      await vectorInsert(
+      await vectorUpsert(
         this.env.VEC_ENTITIES,
         id,
         embedding,
@@ -483,8 +483,8 @@ export class LongTermMemory {
         preferenceEmbeddingText(newCategory, newPreference, newContext),
         this.env.AI
       );
-      await vectorDelete(this.env.VEC_PREFERENCES, [existing.vector_id]);
-      await vectorInsert(
+      // Upsert replaces in place — one Vectorize call instead of delete+insert.
+      await vectorUpsert(
         this.env.VEC_PREFERENCES,
         id,
         embedding,
@@ -724,8 +724,8 @@ export class LongTermMemory {
         factEmbeddingText(newSubject, newPredicate, newObject),
         this.env.AI
       );
-      await vectorDelete(this.env.VEC_FACTS, [existing.vector_id]);
-      await vectorInsert(
+      // Upsert replaces in place — one Vectorize call instead of delete+insert.
+      await vectorUpsert(
         this.env.VEC_FACTS,
         id,
         embedding,
