@@ -7,6 +7,8 @@ import { loginHandler, logoutHandler, meHandler } from './auth/session';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
 import { aiRateLimitMiddleware, globalRateLimitMiddleware } from './middleware/rate-limit';
+import { requestLogMiddleware } from './middleware/request-log';
+import { logError } from './services/logger';
 import mcpServer from './mcp/server';
 
 import projectsRoutes from './routes/projects';
@@ -48,9 +50,16 @@ app.onError((err, c) => {
     c.header('Retry-After', '10');
     return c.json({ error: 'AI capacity exceeded — back off and retry', code: 'AI_RATE_LIMITED' }, 429);
   }
-  console.error('[router] unhandled error:', err);
+  logError('router_unhandled_error', err, { component: 'router' });
   return c.json({ error: 'Internal server error' }, 500);
 });
+
+// ---------------------------------------------------------------------------
+// Per-request structured logging — runs first so denied/404 requests are
+// still observable, and so request_id is available for correlation.
+// ---------------------------------------------------------------------------
+
+app.use('*', requestLogMiddleware);
 
 // ---------------------------------------------------------------------------
 // Security headers on all responses

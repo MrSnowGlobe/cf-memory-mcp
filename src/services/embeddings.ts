@@ -1,4 +1,5 @@
 import { EMBEDDING, CACHE_TTL } from '../config';
+import { logError } from './logger';
 
 function truncateForEmbedding(text: string): string {
   return text.length > EMBEDDING.maxChars ? text.slice(0, EMBEDDING.maxChars) : text;
@@ -69,7 +70,7 @@ export async function getEmbeddingCached(
       expirationTtl: CACHE_TTL.embeddingSeconds,
     });
   } catch (err) {
-    console.error('[embedding-cache] put failed', err);
+    logError('embedding_cache_put_failed', err, { component: 'embedding-cache' });
   }
 
   return embedding;

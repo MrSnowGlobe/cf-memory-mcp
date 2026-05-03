@@ -9,6 +9,7 @@ import { buildContext } from '../memory/context';
 import { promote } from '../memory/promotion';
 import { generateId } from '../utils/ids';
 import { checkMcpMethodRate } from '../middleware/rate-limit';
+import { logError } from '../services/logger';
 import { SSE } from '../config';
 import {
   AddMessageSchema,
@@ -637,7 +638,12 @@ mcp.post('/', async (c) => {
           if (err instanceof Error && err.message.startsWith('Unknown tool:')) {
             return c.json(jsonRpcError(id, -32602, err.message), 400);
           }
-          console.error('[mcp] tool call failed:', err);
+          logError('mcp_tool_call_failed', err, {
+            component: 'mcp',
+            tool_name: toolName,
+            project_id: c.get('projectId'),
+            user_id: c.get('userId'),
+          });
           const errMessage = err instanceof Error ? err.message : 'Internal error';
           return c.json(jsonRpcError(id, -32603, errMessage), 500);
         }
@@ -647,7 +653,7 @@ mcp.post('/', async (c) => {
         return c.json(jsonRpcError(id, -32601, 'Method not found'), 400);
     }
   } catch (err: unknown) {
-    console.error('[mcp] request failed:', err);
+    logError('mcp_request_failed', err, { component: 'mcp' });
     const errMessage = err instanceof Error ? err.message : 'Internal server error';
     return c.json(jsonRpcError(id, -32603, errMessage), 500);
   }

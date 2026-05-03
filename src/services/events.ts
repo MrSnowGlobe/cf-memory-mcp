@@ -1,5 +1,6 @@
 import type { Bindings } from '../types';
 import { scopeDoName, type MemoryEvent } from '../durable-objects/memory-events';
+import { logError } from './logger';
 
 export type EventType = MemoryEvent['type'];
 
@@ -37,6 +38,11 @@ export async function publishEvent(
       body: JSON.stringify(event),
     });
   } catch (err) {
-    console.error('[events] publish failed:', err);
+    logError('event_publish_failed', err, {
+      component: 'events',
+      event_type: type,
+      project_id: projectId,
+      user_id: userId,
+    });
   }
 }
