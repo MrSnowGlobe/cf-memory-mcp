@@ -13,6 +13,7 @@ import { getEmbedding, getEmbeddings } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
 import {
   vectorInsert,
+  vectorInsertMany,
   vectorDelete,
   cascadingSearch,
   getWriteNamespace,
@@ -241,10 +242,16 @@ export class ShortTermMemory {
       // 3a. Generate embeddings for the entire batch
       const embeddings = await getEmbeddings(contents, this.env.AI);
 
-      // 3b. Build D1 insert statements and vector inserts
+      // 3b. Build D1 insert statements and vector payload
       const now = new Date().toISOString();
+      const namespace = getWriteNamespace(this.projectId, this.userId);
       const d1Statements: D1PreparedStatement[] = [];
-      const vectorPromises: Promise<void>[] = [];
+      const vectors: Array<{
+        id: string;
+        values: number[];
+        namespace: string;
+        metadata: Record<string, string>;
+      }> = [];
 
       for (let j = 0; j < batch.length; j++) {
         const msg = batch[j]!;
@@ -268,17 +275,19 @@ export class ShortTermMemory {
           )
         );
 
-        vectorPromises.push(
-          vectorInsert(this.env.VEC_MESSAGES, id, embedding, getWriteNamespace(this.projectId, this.userId), {
-            session_id: sessionId,
-            role: msg.role,
-          })
-        );
+        vectors.push({
+          id,
+          values: embedding,
+          namespace,
+          metadata: { session_id: sessionId, role: msg.role },
+        });
       }
 
-      // 3c. Execute D1 batch and vector inserts
-      await this.env.DB.batch(d1Statements);
-      await Promise.all(vectorPromises);
+      // 3c. Execute D1 batch and a single Vectorize batch insert in parallel
+      await Promise.all([
+        this.env.DB.batch(d1Statements),
+        vectorInsertMany(this.env.VEC_MESSAGES, vectors),
+      ]);
 
       totalInserted += batch.length;
     }

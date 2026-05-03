@@ -46,6 +46,23 @@ export async function vectorUpsert(
 }
 
 /**
+ * Insert many vectors in a single Vectorize call. Use this on batch ingest
+ * paths to collapse N round-trips into 1.
+ */
+export async function vectorInsertMany(
+  index: VectorizeIndex,
+  vectors: Array<{
+    id: string;
+    values: number[];
+    namespace: string;
+    metadata?: Record<string, string>;
+  }>
+): Promise<void> {
+  if (vectors.length === 0) return;
+  await index.insert(vectors);
+}
+
+/**
  * Delete vectors by ID.
  */
 export async function vectorDelete(
