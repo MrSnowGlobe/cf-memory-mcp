@@ -6,8 +6,19 @@ import { ProceduralMemory } from '../memory/procedural';
 
 export type Ctx = Context<AppType>;
 
+// Hono throws if executionCtx isn't available (e.g. some test environments).
+// Wrap access so factories degrade to inline-await semantics gracefully.
+function tryWaitUntil(c: Ctx): ((p: Promise<unknown>) => void) | undefined {
+  try {
+    const ctx = c.executionCtx;
+    return (p) => ctx.waitUntil(p);
+  } catch {
+    return undefined;
+  }
+}
+
 export const stm = (c: Ctx): ShortTermMemory =>
-  new ShortTermMemory(c.env, c.get('projectId'), c.get('userId'));
+  new ShortTermMemory(c.env, c.get('projectId'), c.get('userId'), tryWaitUntil(c));
 
 export const ltm = (c: Ctx): LongTermMemory =>
   new LongTermMemory(c.env, c.get('projectId'), c.get('userId'));

@@ -12,6 +12,7 @@ import type {
 import { ShortTermMemory } from './short-term';
 import { LongTermMemory } from './long-term';
 import { ProceduralMemory } from './procedural';
+import { getEmbedding } from '../services/embeddings';
 import { traverseRelations } from '../services/graph';
 import { GRAPH } from '../config';
 
@@ -62,6 +63,14 @@ export async function buildContext(
   const longTerm = new LongTermMemory(env, projectId, userId);
   const procedural = new ProceduralMemory(env, projectId, userId);
 
+  // Embed the query once and share the result across every search below.
+  // Without this, each search method would call Workers AI separately —
+  // 5 redundant calls per buildContext for an embedding that's identical
+  // every time (same string, same model).
+  const queryEmbedding = await safeOnce('query_embedding', errors, projectId, userId, () =>
+    getEmbedding(input.query, env.AI)
+  );
+
   // ------------------------------------------------------------------
   // 1. Fire all queries in parallel
   // ------------------------------------------------------------------
@@ -75,33 +84,44 @@ export async function buildContext(
         )
       : Promise.resolve([]);
 
+  // If embedding generation failed (queryEmbedding === null), the search
+  // promises below short-circuit to []. The error is already in `errors`.
   const messageSearchPromise: Promise<MaybeSearchResults> =
-    include.includes('short_term')
+    include.includes('short_term') && queryEmbedding
       ? safe('message_search', () =>
-          shortTerm.searchMessages(input.query, { limit: limits.messages })
+          shortTerm.searchMessages(input.query, {
+            limit: limits.messages,
+            embedding: queryEmbedding,
+          })
         )
       : Promise.resolve([]);
 
   const entitySearchPromise: Promise<MaybeSearchResults> =
-    include.includes('long_term')
-      ? safe('entity_search', () => longTerm.searchEntities(input.query, limits.entities))
+    include.includes('long_term') && queryEmbedding
+      ? safe('entity_search', () =>
+          longTerm.searchEntities(input.query, limits.entities, queryEmbedding)
+        )
       : Promise.resolve([]);
 
   const preferenceSearchPromise: Promise<MaybeSearchResults> =
-    include.includes('long_term')
+    include.includes('long_term') && queryEmbedding
       ? safe('preference_search', () =>
-          longTerm.searchPreferences(input.query, limits.preferences)
+          longTerm.searchPreferences(input.query, limits.preferences, queryEmbedding)
         )
       : Promise.resolve([]);
 
   const factSearchPromise: Promise<MaybeSearchResults> =
-    include.includes('long_term')
-      ? safe('fact_search', () => longTerm.searchFacts(input.query, limits.facts))
+    include.includes('long_term') && queryEmbedding
+      ? safe('fact_search', () =>
+          longTerm.searchFacts(input.query, limits.facts, queryEmbedding)
+        )
       : Promise.resolve([]);
 
   const traceSearchPromise: Promise<MaybeSearchResults> =
-    include.includes('procedural')
-      ? safe('trace_search', () => procedural.searchTraces(input.query, limits.traces))
+    include.includes('procedural') && queryEmbedding
+      ? safe('trace_search', () =>
+          procedural.searchTraces(input.query, limits.traces, queryEmbedding)
+        )
       : Promise.resolve([]);
 
   const [
@@ -231,6 +251,39 @@ export async function buildContext(
 // ---------------------------------------------------------------------------
 
 type SafeQuery = <T>(source: string, fn: () => Promise<T[]>) => Promise<T[]>;
+
+/**
+ * One-shot variant of safeQuery for non-array results (e.g. the shared
+ * query embedding). Returns null on failure, logging + collecting the
+ * error in the same shape as makeSafeQuery so callers can surface it.
+ */
+async function safeOnce<T>(
+  source: string,
+  errors: ContextError[],
+  projectId: string,
+  userId: string,
+  fn: () => Promise<T>
+): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (err: unknown) {
+    const name = err instanceof Error ? err.constructor.name : 'UnknownError';
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        component: 'context',
+        source,
+        project_id: projectId,
+        user_id: userId,
+        error: name,
+        message,
+      })
+    );
+    errors.push({ source, message: `${name}: ${message}` });
+    return null;
+  }
+}
 
 /**
  * Factory for a labelled safe-query wrapper. Failures are logged as

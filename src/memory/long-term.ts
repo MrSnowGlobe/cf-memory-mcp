@@ -263,9 +263,12 @@ export class LongTermMemory {
 
   async searchEntities(
     query: string,
-    limit: number = 10
+    limit: number = 10,
+    precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = await getEmbedding(query, this.env.AI);
+    // Callers bulk-searching across memory types (e.g. buildContext) can
+    // pass a precomputed embedding to share one Workers AI call.
+    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
     return cascadingSearch(
       this.env.VEC_ENTITIES,
       embedding,
@@ -513,9 +516,10 @@ export class LongTermMemory {
 
   async searchPreferences(
     query: string,
-    limit: number = 10
+    limit: number = 10,
+    precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = await getEmbedding(query, this.env.AI);
+    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
     return cascadingSearch(
       this.env.VEC_PREFERENCES,
       embedding,
@@ -628,9 +632,10 @@ export class LongTermMemory {
 
   async searchFacts(
     query: string,
-    limit: number = 10
+    limit: number = 10,
+    precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = await getEmbedding(query, this.env.AI);
+    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
     // Pull a wider candidate set so the post-filter for expired facts
     // doesn't cause us to return fewer rows than `limit` when the top
     // matches happen to be stale.
