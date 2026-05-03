@@ -18,6 +18,7 @@ import { generateId } from '../utils/ids';
 import { NotFoundError } from '../utils/errors';
 import {
   getEmbedding,
+  getEmbeddingCached,
   entityEmbeddingText,
   preferenceEmbeddingText,
   factEmbeddingText,
@@ -267,8 +268,12 @@ export class LongTermMemory {
     precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
     // Callers bulk-searching across memory types (e.g. buildContext) can
-    // pass a precomputed embedding to share one Workers AI call.
-    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
+    // pass a precomputed embedding to share one Workers AI call across
+    // queries; standalone callers fall through to the KV-backed cache so
+    // repeat queries skip Workers AI altogether.
+    const embedding =
+      precomputedEmbedding ??
+      (await getEmbeddingCached(query, this.env.AI, this.env.CACHE));
     return cascadingSearch(
       this.env.VEC_ENTITIES,
       embedding,
@@ -519,7 +524,9 @@ export class LongTermMemory {
     limit: number = 10,
     precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
+    const embedding =
+      precomputedEmbedding ??
+      (await getEmbeddingCached(query, this.env.AI, this.env.CACHE));
     return cascadingSearch(
       this.env.VEC_PREFERENCES,
       embedding,
@@ -635,7 +642,9 @@ export class LongTermMemory {
     limit: number = 10,
     precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
+    const embedding =
+      precomputedEmbedding ??
+      (await getEmbeddingCached(query, this.env.AI, this.env.CACHE));
     // Pull a wider candidate set so the post-filter for expired facts
     // doesn't cause us to return fewer rows than `limit` when the top
     // matches happen to be stale.

@@ -15,7 +15,7 @@ import type {
 import { generateId } from '../utils/ids';
 import { NotFoundError } from '../utils/errors';
 import { parsePagination } from '../utils/pagination';
-import { getEmbedding } from '../services/embeddings';
+import { getEmbedding, getEmbeddingCached } from '../services/embeddings';
 import { cacheGet, cacheSet, cacheDelete } from '../services/cache';
 import { vectorInsert, vectorUpsert, cascadingSearch, getWriteNamespace } from '../services/vectorize';
 import { publishEvent } from '../services/events';
@@ -189,7 +189,9 @@ export class ProceduralMemory {
     limit: number = 10,
     precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
+    const embedding =
+      precomputedEmbedding ??
+      (await getEmbeddingCached(query, this.env.AI, this.env.CACHE));
     return cascadingSearch(
       this.env.VEC_TRACES,
       embedding,
