@@ -24,7 +24,12 @@ export class ShortTermMemory {
   constructor(
     private env: Bindings,
     private projectId: string,
-    private userId: string = 'default'
+    private userId: string = 'default',
+    // Optional — when present (set by route factories from c.executionCtx),
+    // non-critical follow-up writes are deferred so they don't block the
+    // user response. Tests and non-Worker contexts omit it and writes
+    // execute inline.
+    private waitUntil?: (promise: Promise<unknown>) => void
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -127,9 +132,22 @@ export class ShortTermMemory {
       this.insertMessageScoped(id, sessionId, role, content, metaJson, now),
     ]);
 
-    // Vector insert, session bump, and cache invalidation are independent — fan out.
+    // Vector insert + cache invalidation must complete before responding —
+    // searches immediately after must see the new message and stale cache
+    // would return without it. The session updated_at bump is purely a
+    // sort-order signal for sessions list, so we defer it via waitUntil
+    // when running in a Worker (falls through to inline await in tests).
+    const sessionBump = this.env.DB.prepare(
+      'UPDATE sessions SET updated_at = ? WHERE id = ?'
+    )
+      .bind(now, sessionId)
+      .run();
+    if (this.waitUntil) {
+      this.waitUntil(sessionBump);
+    }
+
     try {
-      await Promise.all([
+      const critical: Promise<unknown>[] = [
         vectorInsert(
           this.env.VEC_MESSAGES,
           id,
@@ -137,18 +155,15 @@ export class ShortTermMemory {
           getWriteNamespace(this.projectId, this.userId),
           { session_id: sessionId, role }
         ),
-        this.env.DB.prepare(
-          'UPDATE sessions SET updated_at = ? WHERE id = ?'
-        )
-          .bind(now, sessionId)
-          .run(),
         cacheDelete(
           this.env.CACHE,
           this.projectId,
           this.userId,
           `session:${sessionId}:recent`
         ),
-      ]);
+      ];
+      if (!this.waitUntil) critical.push(sessionBump);
+      await Promise.all(critical);
     } catch (err) {
       console.error('[short-term] post-insert side-effects failed for message', id, err);
       throw err;
@@ -314,10 +329,13 @@ export class ShortTermMemory {
 
   async searchMessages(
     query: string,
-    opts?: { sessionId?: string; limit?: number }
+    opts?: { sessionId?: string; limit?: number; embedding?: number[] }
   ): Promise<SearchResult[]> {
     const limit = opts?.limit ?? 10;
-    const embedding = await getEmbedding(query, this.env.AI);
+    // Callers that bulk-search across memory types (e.g. buildContext)
+    // can pass a precomputed embedding to share one Workers AI call
+    // across all queries against the same query string.
+    const embedding = opts?.embedding ?? (await getEmbedding(query, this.env.AI));
 
     const filter = opts?.sessionId ? { session_id: opts.sessionId } : undefined;
 

@@ -186,9 +186,10 @@ export class ProceduralMemory {
 
   async searchTraces(
     query: string,
-    limit: number = 10
+    limit: number = 10,
+    precomputedEmbedding?: number[]
   ): Promise<SearchResult[]> {
-    const embedding = await getEmbedding(query, this.env.AI);
+    const embedding = precomputedEmbedding ?? (await getEmbedding(query, this.env.AI));
     return cascadingSearch(
       this.env.VEC_TRACES,
       embedding,
