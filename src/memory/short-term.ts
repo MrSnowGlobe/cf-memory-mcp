@@ -233,31 +233,33 @@ export class ShortTermMemory {
     messages: AddMessageInput[],
     batchSize: number = 100
   ): Promise<number> {
-    // 1. Verify session exists
+    // 1. Verify session exists. We keep this check up-front so we throw
+    //    NotFoundError before paying for embedding generation, but it is
+    //    NOT what makes the batch race-safe — that's the inline MAX in
+    //    each INSERT below.
     const session = await this.getSession(sessionId);
     if (!session) {
       throw new NotFoundError(`Session ${sessionId}`);
     }
 
-    // 2. Get current max sequence_num
-    const seqResult = await this.env.DB.prepare(
-      'SELECT COALESCE(MAX(sequence_num), 0) AS max_seq FROM messages WHERE session_id = ?'
-    )
-      .bind(sessionId)
-      .first<{ max_seq: number }>();
-
-    let currentSeq = seqResult?.max_seq ?? 0;
     let totalInserted = 0;
 
-    // 3. Process in batches
+    // 2. Process in batches
     for (let i = 0; i < messages.length; i += batchSize) {
       const batch = messages.slice(i, i + batchSize);
       const contents = batch.map((m) => m.content);
 
-      // 3a. Generate embeddings for the entire batch
+      // 2a. Generate embeddings for the entire batch
       const embeddings = await getEmbeddings(contents, this.env.AI);
 
-      // 3b. Build D1 insert statements and vector payload
+      // 2b. Build D1 insert statements and vector payload. Each INSERT
+      //     computes its own sequence_num via an inline
+      //     COALESCE(MAX(...), 0) + 1 against messages for this session,
+      //     joined to sessions for scope validation. Within a d1.batch()
+      //     the statements run atomically as a single transaction, so
+      //     each subsequent INSERT's MAX sees the previous ones — no JS
+      //     counter, no race against concurrent batch/single-message
+      //     writers, no UNIQUE collisions on (session_id, sequence_num).
       const now = new Date().toISOString();
       const namespace = getWriteNamespace(this.projectId, this.userId);
       const d1Statements: D1PreparedStatement[] = [];
@@ -272,21 +274,26 @@ export class ShortTermMemory {
         const msg = batch[j]!;
         const embedding = embeddings[j]!;
         const id = generateId();
-        currentSeq += 1;
         const metaJson = JSON.stringify(msg.metadata ?? {});
 
         d1Statements.push(
           this.env.DB.prepare(
-            'INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            `INSERT INTO messages (id, session_id, role, content, metadata, created_at, sequence_num, vector_id)
+             SELECT ?, s.id, ?, ?, ?, ?,
+                    COALESCE((SELECT MAX(sequence_num) FROM messages WHERE session_id = s.id), 0) + 1,
+                    ?
+             FROM sessions s
+             WHERE s.id = ? AND s.project_id = ? AND s.user_id = ?`
           ).bind(
             id,
-            sessionId,
             msg.role,
             msg.content,
             metaJson,
             now,
-            currentSeq,
-            id
+            id,
+            sessionId,
+            this.projectId,
+            this.userId
           )
         );
 
@@ -298,7 +305,7 @@ export class ShortTermMemory {
         });
       }
 
-      // 3c. Execute D1 batch and a single Vectorize batch insert in parallel
+      // 2c. Execute D1 batch and a single Vectorize batch insert in parallel
       await Promise.all([
         this.env.DB.batch(d1Statements),
         vectorInsertMany(this.env.VEC_MESSAGES, vectors),
