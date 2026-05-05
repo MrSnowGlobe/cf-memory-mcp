@@ -61,7 +61,8 @@ interface McpToolDefinition {
 const TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: 'memory_add_message',
-    description: 'Add a message to a conversation session in short-term memory.',
+    description:
+      'Append a message to a conversation session (short-term memory). Call this whenever the user shares context worth preserving across the session, or when the agent wants its own reply persisted. Requires an existing session — call memory_create_session first if none exists.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -76,7 +77,7 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: 'memory_search',
     description:
-      'Search across memory types (messages, entities, preferences, facts, traces). Uses cascading search across project and global scopes.',
+      'Search stored memories across types (messages, entities, preferences, facts, traces). CALL THIS WHENEVER the user says "recall", "what do you know about", "remember when", "have we discussed", or otherwise references prior context. Uses cascading semantic search across project and global scopes — prefer this over answering from conversation context alone when the user is invoking memory.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -93,7 +94,7 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: 'memory_get_context',
     description:
-      'Build a unified context string from all memory types for a given query. Returns formatted text with recent conversation, entities, preferences, facts, and past traces.',
+      'Build a unified context block from all memory types (recent messages, entities, preferences, facts, past traces). CALL THIS FIRST at the start of any complex or multi-step task, before answering questions that depend on user history, and whenever entering a new session that may benefit from prior context. Cheaper than several individual searches when you need broad situational awareness.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -119,7 +120,8 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   },
   {
     name: 'memory_add_entity',
-    description: 'Add an entity to long-term memory. Runs entity resolution first to prevent duplicates.',
+    description:
+      'Persist a named entity (person, place, organization, object, event, custom) to long-term memory. Call when the user introduces a stable proper-noun thing worth remembering across sessions ("my colleague Maria", "the Atlas project", "our staging cluster"). Runs entity resolution first — if a matching entity already exists in this project or global scope, the existing record is returned instead of creating a duplicate.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -136,7 +138,8 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   },
   {
     name: 'memory_add_preference',
-    description: 'Store a user preference in long-term memory.',
+    description:
+      'Save a user preference to long-term memory. CALL THIS WHENEVER the user says "remember", "save this", "store", "from now on", "I prefer", "always do X", or otherwise expresses a durable preference about how they want work done. Use category to group (e.g. "communication_style", "code_style", "tooling"). Prefer this over memory_add_fact when the statement is about how the user wants things done rather than an objective triple.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,7 +152,8 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   },
   {
     name: 'memory_add_fact',
-    description: 'Store a fact as a subject-predicate-object triple in long-term memory.',
+    description:
+      'Store an objective fact as a subject-predicate-object triple in long-term memory. CALL THIS WHENEVER the user shares a durable, verifiable piece of information ("Maria works at Acme", "the prod region is us-east-1", "the migration shipped on 2026-04-01"). Use memory_add_preference instead when the statement is about how the user wants things done. Optional valid_from/valid_until support time-bounded facts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -164,7 +168,8 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   },
   {
     name: 'memory_start_trace',
-    description: 'Start a new reasoning trace in procedural memory to track a task execution.',
+    description:
+      'Open a reasoning trace (procedural memory) for a task the agent is about to execute. Call at the start of any non-trivial multi-step task so the steps and tool calls can be recorded for later replay/debugging. Pair with memory_add_step for each thought/action and memory_complete_trace at the end.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -177,7 +182,7 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: 'memory_promote_to_global',
     description:
-      'Promote a project-scoped entity, preference, or fact to global scope so it is visible across all projects.',
+      'Promote a project-scoped entity, preference, or fact so it is visible from every project. CALL THIS WHENEVER the user says "promote", "make this global", or otherwise asks for a memory to be shared across projects. The original project-scoped record stays in place — promotion is a copy, not a move — and an audit row is written to promotion_log. Set target="user" to scope to the user instead of fully global.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -320,6 +325,166 @@ const TOOL_DEFINITIONS: McpToolDefinition[] = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// MCP Prompt definitions
+//
+// Prompts are how MCP carries slash-command-style entry points to clients
+// that don't read CLAUDE.md (Zed/ACP, Cursor, etc). Each prompt expands into
+// one or more user/assistant messages that steer the model toward the right
+// memory tool — they don't call tools directly. Clients typically surface
+// these as `/<server>:<prompt>` slash commands.
+// ---------------------------------------------------------------------------
+
+interface McpPromptArgument {
+  name: string;
+  description: string;
+  required: boolean;
+}
+
+interface McpPromptDefinition {
+  name: string;
+  description: string;
+  arguments: McpPromptArgument[];
+}
+
+const PROMPT_DEFINITIONS: McpPromptDefinition[] = [
+  {
+    name: 'remember',
+    description:
+      'Persist information to long-term memory. Routes to memory_add_preference, memory_add_fact, or memory_add_entity depending on the content.',
+    arguments: [
+      {
+        name: 'content',
+        description: 'The information to remember (a preference, a fact, or an entity description).',
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'recall',
+    description:
+      'Retrieve relevant memories for a query via cascading search across project and global scopes.',
+    arguments: [
+      {
+        name: 'query',
+        description: 'What to look up. Free text — semantic search will match against stored memories.',
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'context',
+    description:
+      'Build a unified context block (recent conversation, entities, preferences, facts, past traces) for a given query. Use at the start of complex tasks.',
+    arguments: [
+      {
+        name: 'query',
+        description: 'The task or question to gather context for.',
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'promote',
+    description:
+      'Promote a project-scoped memory to global scope so it is visible across all projects. Requires the memory id and a reason.',
+    arguments: [
+      {
+        name: 'type',
+        description: 'One of "entity", "preference", or "fact".',
+        required: true,
+      },
+      {
+        name: 'id',
+        description: 'The memory id to promote.',
+        required: true,
+      },
+      {
+        name: 'reason',
+        description: 'Short justification for promotion (recorded in the audit log).',
+        required: true,
+      },
+    ],
+  },
+];
+
+interface McpPromptMessage {
+  role: 'user' | 'assistant';
+  content: { type: 'text'; text: string };
+}
+
+function buildPromptMessages(name: string, args: Record<string, string>): McpPromptMessage[] {
+  switch (name) {
+    case 'remember': {
+      const content = args['content'] ?? '';
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text:
+              `Persist the following to long-term memory using the most appropriate cf-agent-memory tool ` +
+              `(memory_add_preference for "I prefer / from now on / always" style guidance, ` +
+              `memory_add_fact for objective subject-predicate-object triples, ` +
+              `memory_add_entity for named people/places/orgs/objects). ` +
+              `Do not respond from conversation context alone — make the tool call.\n\n` +
+              `Content to remember:\n${content}`,
+          },
+        },
+      ];
+    }
+    case 'recall': {
+      const query = args['query'] ?? '';
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text:
+              `Retrieve relevant memories for the following query by calling memory_search ` +
+              `(or memory_get_context if the task warrants a unified block). ` +
+              `Do not answer from conversation context alone — make the tool call first, then summarize the results.\n\n` +
+              `Query: ${query}`,
+          },
+        },
+      ];
+    }
+    case 'context': {
+      const query = args['query'] ?? '';
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text:
+              `Call memory_get_context with the following query, then use the returned block to inform your subsequent work. ` +
+              `Do not skip the tool call.\n\n` +
+              `Query: ${query}`,
+          },
+        },
+      ];
+    }
+    case 'promote': {
+      const type = args['type'] ?? '';
+      const id = args['id'] ?? '';
+      const reason = args['reason'] ?? '';
+      return [
+        {
+          role: 'user',
+          content: {
+            type: 'text',
+            text:
+              `Call memory_promote_to_global with type="${type}", id="${id}", reason="${reason}". ` +
+              `Confirm the promotion result to the user.`,
+          },
+        },
+      ];
+    }
+    default:
+      throw new InvalidParamsError(`Unknown prompt: ${name}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Zod schemas for MCP args — reuse REST schemas where possible.
@@ -595,7 +760,7 @@ mcp.post('/', async (c) => {
         return c.json(
           jsonRpcResult(id, {
             protocolVersion: '2025-03-26',
-            capabilities: { tools: {} },
+            capabilities: { tools: {}, prompts: {} },
             serverInfo: { name: 'cf-agent-memory', version: '0.1.0' },
           })
         );
@@ -603,6 +768,42 @@ mcp.post('/', async (c) => {
 
       case 'tools/list':
         return c.json(jsonRpcResult(id, { tools: TOOL_DEFINITIONS }));
+
+      case 'prompts/list':
+        return c.json(jsonRpcResult(id, { prompts: PROMPT_DEFINITIONS }));
+
+      case 'prompts/get': {
+        const params = request.params;
+        if (!params || typeof params['name'] !== 'string') {
+          return c.json(jsonRpcError(id, -32602, 'Invalid params: missing prompt name'), 400);
+        }
+        const promptName = params['name'];
+        const rawArgs = params['arguments'];
+        const promptArgs: Record<string, string> = {};
+        if (typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs)) {
+          for (const [k, v] of Object.entries(rawArgs as Record<string, unknown>)) {
+            if (typeof v === 'string') promptArgs[k] = v;
+          }
+        }
+        const def = PROMPT_DEFINITIONS.find((p) => p.name === promptName);
+        if (!def) {
+          return c.json(jsonRpcError(id, -32602, `Unknown prompt: ${promptName}`), 400);
+        }
+        for (const arg of def.arguments) {
+          if (arg.required && !promptArgs[arg.name]) {
+            return c.json(jsonRpcError(id, -32602, `Missing required argument: ${arg.name}`), 400);
+          }
+        }
+        try {
+          const messages = buildPromptMessages(promptName, promptArgs);
+          return c.json(jsonRpcResult(id, { description: def.description, messages }));
+        } catch (err: unknown) {
+          if (err instanceof InvalidParamsError) {
+            return c.json(jsonRpcError(id, err.code, err.message), 400);
+          }
+          throw err;
+        }
+      }
 
       case 'tools/call': {
         const params = request.params;
