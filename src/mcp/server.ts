@@ -741,7 +741,10 @@ mcp.post('/', async (c) => {
   const method = body['method'] as string;
 
   if (!('id' in body)) {
-    return c.body(null, 204);
+    // Streamable HTTP: notifications/responses get 202 Accepted, not 204.
+    // Strict clients (Zed) treat a non-202 here as a failed handshake and
+    // skip tools/list, surfacing as "connected but 0 tools".
+    return c.body(null, 202);
   }
 
   const id = body['id'] as string | number;
