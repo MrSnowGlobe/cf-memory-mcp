@@ -8,7 +8,7 @@ export type Ctx = Context<AppType>;
 
 // Hono throws if executionCtx isn't available (e.g. some test environments).
 // Wrap access so factories degrade to inline-await semantics gracefully.
-function tryWaitUntil(c: Ctx): ((p: Promise<unknown>) => void) | undefined {
+export function tryWaitUntil(c: Ctx): ((p: Promise<unknown>) => void) | undefined {
   try {
     const ctx = c.executionCtx;
     return (p) => ctx.waitUntil(p);
