@@ -22,7 +22,7 @@ export async function getEmbedding(text: string, ai: Ai): Promise<number[]> {
 // wrong embedding space.
 const EMBED_CACHE_PREFIX = `emb:${EMBEDDING.model}:`;
 
-async function hashText(text: string): Promise<string> {
+export async function hashText(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const buf = await crypto.subtle.digest('SHA-256', data);
   const bytes = new Uint8Array(buf);

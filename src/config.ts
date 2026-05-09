@@ -26,6 +26,12 @@ export const CACHE_TTL = {
   // cached for a long time. Invalidates implicitly on model change
   // because the cache key includes the model id.
   embeddingSeconds: 86_400,
+  // Short by design — buildContext output reflects the current memory
+  // state at call time, so a long TTL would mask freshly-added entities/
+  // facts on rapid follow-up reads. 60s captures conversational
+  // re-asks (typo fixes, retries, near-duplicate prompts) without making
+  // staleness perceptible.
+  contextSeconds: 60,
 } as const;
 
 export const SSE = {
