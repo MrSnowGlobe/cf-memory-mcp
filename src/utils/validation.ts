@@ -7,13 +7,87 @@ import { z } from 'zod';
 const MAX_STRING = 50_000;
 const MAX_SHORT_STRING = 500;
 const MAX_METADATA_KEYS = 50;
+const MAX_METADATA_DEPTH = 6;
+const MAX_METADATA_BYTES = 16_384;
 const MAX_BATCH_SIZE = 100;
 
-/** Metadata object with bounded size to prevent DoS via huge payloads. */
-const metadataSchema = z.record(z.unknown()).refine(
-  (obj) => Object.keys(obj).length <= MAX_METADATA_KEYS,
-  { message: `Metadata must have at most ${MAX_METADATA_KEYS} keys` }
-).optional();
+/**
+ * Walk a JSON-shaped value and return its maximum nesting depth. Bails out
+ * as soon as `max` is exceeded so a pathological input doesn't burn CPU
+ * before the refinement rejects it.
+ */
+function jsonDepth(value: unknown, max: number, current = 0): number {
+  if (current > max) return current;
+  if (value === null || typeof value !== 'object') return current;
+  let deepest = current;
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    const d = jsonDepth(v, max, current + 1);
+    if (d > deepest) deepest = d;
+    if (deepest > max) return deepest;
+  }
+  return deepest;
+}
+
+/**
+ * Metadata object with bounded keys, depth, and serialised size. Each
+ * constraint catches a different DoS shape: too-many-keys (CPU on iteration),
+ * too-deep (JSON.stringify recursion), too-large (D1 row bloat + log spam).
+ */
+const metadataSchema = z
+  .record(z.unknown())
+  .refine((obj) => Object.keys(obj).length <= MAX_METADATA_KEYS, {
+    message: `Metadata must have at most ${MAX_METADATA_KEYS} keys`,
+  })
+  .refine((obj) => jsonDepth(obj, MAX_METADATA_DEPTH) <= MAX_METADATA_DEPTH, {
+    message: `Metadata must nest at most ${MAX_METADATA_DEPTH} levels deep`,
+  })
+  .refine(
+    (obj) => {
+      try {
+        return JSON.stringify(obj).length <= MAX_METADATA_BYTES;
+      } catch {
+        return false;
+      }
+    },
+    { message: `Metadata must serialise to at most ${MAX_METADATA_BYTES} chars` }
+  )
+  .optional();
+
+// ============================================================
+// Shared query-string schemas
+// ============================================================
+
+/**
+ * Standard pagination params for list endpoints. Backed by z.coerce so
+ * "12" parses as 12 but "Infinity" / "NaN" / "-1" / "abc" are rejected by
+ * `.int()` / `.min()` rather than slipping through as Number() coercions
+ * to downstream clamp helpers.
+ */
+export const PaginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).max(1_000_000).optional(),
+});
+export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;
+
+/** Snapshot endpoint accepts six independent caps. */
+export const SnapshotQuerySchema = z.object({
+  entity_limit: z.coerce.number().int().min(1).max(5000).optional(),
+  relation_limit: z.coerce.number().int().min(1).max(5000).optional(),
+  message_limit: z.coerce.number().int().min(1).max(5000).optional(),
+  trace_limit: z.coerce.number().int().min(1).max(5000).optional(),
+  preference_limit: z.coerce.number().int().min(1).max(5000).optional(),
+  fact_limit: z.coerce.number().int().min(1).max(5000).optional(),
+});
+export type SnapshotQuery = z.infer<typeof SnapshotQuerySchema>;
+
+/** Trace list endpoint accepts pagination + filters. */
+export const TraceListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).max(1_000_000).optional(),
+  session_id: z.string().min(1).max(MAX_SHORT_STRING).optional(),
+  success: z.enum(['true', 'false']).optional(),
+});
+export type TraceListQuery = z.infer<typeof TraceListQuerySchema>;
 
 // ============================================================
 // Short-Term Memory

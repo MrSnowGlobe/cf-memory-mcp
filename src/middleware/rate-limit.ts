@@ -70,3 +70,23 @@ export async function checkMcpMethodRate(
 ): Promise<boolean> {
   return enforce(limiter, `${projectId}:${userId}:${method}`);
 }
+
+/**
+ * Pre-auth limiter for POST /auth/login. Keyed on the caller's IP so a
+ * password-guessing attacker hits the cap before exhausting the search
+ * space, but a legitimate user signing in from the same NAT as someone
+ * else isn't punished for their neighbour's mistakes (still scoped per IP,
+ * not per /24). No-op when `RL_LOGIN` is not bound.
+ */
+export const loginRateLimitMiddleware = createMiddleware<AppType>(async (c, next) => {
+  const ip =
+    c.req.header('CF-Connecting-IP') ??
+    c.req.header('X-Forwarded-For') ??
+    'unknown';
+  const ok = await enforce(c.env.RL_LOGIN, `login:${ip}`);
+  if (!ok) {
+    c.header('Retry-After', '60');
+    return c.json({ error: 'Too many login attempts. Try again in a minute.' }, 429);
+  }
+  await next();
+});

@@ -164,6 +164,7 @@ The worker ships with three Cloudflare `ratelimit` bindings (already in `wrangle
 | `RL_GLOBAL` | 300 req/min | `{projectId}:{userId}` | All `/api/*` and `/mcp/*` |
 | `RL_AI` | 60 req/min | `{projectId}:{userId}` | POST/PUT under `/api/v1/*`, all `*/search`, and `/api/v1/context` |
 | `RL_MCP` | 30 req/min | `{projectId}:{userId}:{toolName}` | Per-method on MCP `tools/call` |
+| `RL_LOGIN` | 10 req/min | `CF-Connecting-IP` | `POST /auth/login` (pre-auth, caps password guessing) |
 
 The broad `RL_GLOBAL` limiter is a code-level stand-in for an edge-level Cloudflare WAF rate-limiting rule (which requires a Pro plan for header-keyed characteristics). Tune any of the three by editing the `simple = { limit = N, period = 60 }` block in `wrangler.toml` and redeploying. All three bindings are optional — the middleware is a no-op if a binding is absent, so tests and forks work without them.
 

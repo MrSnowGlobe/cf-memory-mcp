@@ -6,6 +6,7 @@ import {
   AddMessageSchema,
   BatchMessagesSchema,
   SearchQuerySchema,
+  PaginationQuerySchema,
 } from '../utils/validation';
 import { stm } from './_shared';
 
@@ -25,9 +26,8 @@ app.post(
   }
 );
 
-app.get('/api/v1/sessions', async (c) => {
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
+app.get('/api/v1/sessions', zValidator('query', PaginationQuerySchema), async (c) => {
+  const { limit, offset } = c.req.valid('query');
   const sessions = await stm(c).listSessions({ limit, offset });
   return c.json(sessions);
 });
@@ -64,11 +64,15 @@ app.post(
   }
 );
 
-app.get('/api/v1/sessions/:id/messages', async (c) => {
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const messages = await stm(c).getConversation(c.req.param('id'), limit);
-  return c.json(messages);
-});
+app.get(
+  '/api/v1/sessions/:id/messages',
+  zValidator('query', PaginationQuerySchema),
+  async (c) => {
+    const { limit } = c.req.valid('query');
+    const messages = await stm(c).getConversation(c.req.param('id'), limit);
+    return c.json(messages);
+  }
+);
 
 app.post(
   '/api/v1/sessions/:id/messages/batch',

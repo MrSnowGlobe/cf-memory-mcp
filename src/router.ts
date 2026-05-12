@@ -7,7 +7,11 @@ import { adminAuthMiddleware } from './middleware/admin-auth';
 import { loginHandler, logoutHandler, meHandler } from './auth/session';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
-import { aiRateLimitMiddleware, globalRateLimitMiddleware } from './middleware/rate-limit';
+import {
+  aiRateLimitMiddleware,
+  globalRateLimitMiddleware,
+  loginRateLimitMiddleware,
+} from './middleware/rate-limit';
 import { requestLogMiddleware } from './middleware/request-log';
 import { logError } from './services/logger';
 import mcpServer from './mcp/server';
@@ -71,6 +75,25 @@ app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('X-Frame-Options', 'DENY');
   c.header('Cache-Control', 'no-store');
+  // Tight CSP for the Observatory SPA — script/style restricted to same origin,
+  // Google Fonts whitelisted (the only external resource), inline styles
+  // permitted because the SPA toggles inline style.* properties at runtime
+  // (forbidden by CSP would break the graph visualisation). `frame-ancestors`
+  // doubles the X-Frame-Options DENY in modern browsers.
+  c.header(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+      "script-src 'self'; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' https://fonts.gstatic.com data:; " +
+      "img-src 'self' data:; " +
+      "connect-src 'self'; " +
+      "frame-ancestors 'none'; " +
+      "base-uri 'self'; " +
+      "form-action 'self'"
+  );
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 });
 
 // ---------------------------------------------------------------------------
@@ -83,7 +106,7 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 // Browser session auth — no bearer/cookie required to hit /auth/*
 // ---------------------------------------------------------------------------
 
-app.post('/auth/login', loginHandler);
+app.post('/auth/login', loginRateLimitMiddleware, loginHandler);
 app.post('/auth/logout', logoutHandler);
 app.get('/auth/me', meHandler);
 
