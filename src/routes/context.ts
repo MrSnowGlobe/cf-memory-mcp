@@ -5,6 +5,7 @@ import type { ContextRequestInput } from '../utils/validation';
 import {
   PromoteRequestSchema,
   ContextRequestSchema,
+  SnapshotQuerySchema,
 } from '../utils/validation';
 import { buildContext } from '../memory/context';
 import { promote } from '../memory/promotion';
@@ -127,16 +128,15 @@ app.get('/api/v1/atlas', async (c) => {
   return c.json(atlas);
 });
 
-app.get('/api/v1/snapshot', async (c) => {
-  const num = (q: string | undefined): number | undefined =>
-    q !== undefined ? Number(q) : undefined;
+app.get('/api/v1/snapshot', zValidator('query', SnapshotQuerySchema), async (c) => {
+  const q = c.req.valid('query');
   const snapshot = await getGraphSnapshot(c.env, c.get('projectId'), c.get('userId'), {
-    entityLimit: num(c.req.query('entity_limit')),
-    relationLimit: num(c.req.query('relation_limit')),
-    messageLimit: num(c.req.query('message_limit')),
-    traceLimit: num(c.req.query('trace_limit')),
-    preferenceLimit: num(c.req.query('preference_limit')),
-    factLimit: num(c.req.query('fact_limit')),
+    entityLimit: q.entity_limit,
+    relationLimit: q.relation_limit,
+    messageLimit: q.message_limit,
+    traceLimit: q.trace_limit,
+    preferenceLimit: q.preference_limit,
+    factLimit: q.fact_limit,
   });
   return c.json(snapshot);
 });

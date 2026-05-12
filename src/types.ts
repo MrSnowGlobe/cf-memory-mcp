@@ -27,6 +27,10 @@ export interface Bindings {
   /** Broad per-tenant cap across all /api/* and /mcp/* requests. Stand-in for
    *  an edge-level WAF rule when the Pro plan isn't in play. Optional. */
   RL_GLOBAL?: RateLimit;
+  /** Pre-auth limiter for POST /auth/login. Keyed on the requester's IP to
+   *  cap password-guessing without disrupting legitimate sign-ins. Optional —
+   *  no-op when absent so tests and forks aren't required to provision it. */
+  RL_LOGIN?: RateLimit;
 }
 
 /** Minimal Cloudflare rate-limit binding surface we depend on. */

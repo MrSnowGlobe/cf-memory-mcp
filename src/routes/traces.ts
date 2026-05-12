@@ -7,6 +7,7 @@ import {
   AddStepSchema,
   RecordToolCallSchema,
   SearchQuerySchema,
+  TraceListQuerySchema,
 } from '../utils/validation';
 import { pm } from './_shared';
 
@@ -36,15 +37,16 @@ app.put(
   }
 );
 
-app.get('/api/v1/traces', async (c) => {
-  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
-  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined;
-  const sessionId = c.req.query('session_id');
-  const successParam = c.req.query('success');
-  const success =
-    successParam === 'true' ? true : successParam === 'false' ? false : undefined;
-
-  const traces = await pm(c).listTraces({ limit, offset, session_id: sessionId, success });
+app.get('/api/v1/traces', zValidator('query', TraceListQuerySchema), async (c) => {
+  const { limit, offset, session_id, success } = c.req.valid('query');
+  const successBool =
+    success === 'true' ? true : success === 'false' ? false : undefined;
+  const traces = await pm(c).listTraces({
+    limit,
+    offset,
+    session_id,
+    success: successBool,
+  });
   return c.json(traces);
 });
 

@@ -1,4 +1,5 @@
 import type { Bindings } from '../types';
+import { logWarn } from '../services/logger';
 
 /**
  * Shape of an event broadcast to WebSocket subscribers.
@@ -59,6 +60,25 @@ export class MemoryEventsDO implements DurableObject {
 
     // WebSocket upgrade: subscribe to live events.
     if (request.headers.get('Upgrade') === 'websocket') {
+      // Defence-in-depth: if the routing layer told us which scope this DO
+      // is supposed to be serving, stash it on the first connection and
+      // warn loudly if a later upgrade carries a different value. The DO
+      // has no other way to verify its own identity, so this catches the
+      // class of bug where middleware resolves one scope but the route
+      // forwards to another DO (cf. 2026-04-18 query-param-fallback bug).
+      const declared = request.headers.get('X-Internal-Scope');
+      if (declared) {
+        const stored = (await this.state.storage.get<string>('declared_scope')) ?? null;
+        if (stored === null) {
+          await this.state.storage.put('declared_scope', declared);
+        } else if (stored !== declared) {
+          logWarn('memory_events_do_scope_mismatch', {
+            component: 'memory-events-do',
+            message: `DO declared_scope=${stored} but incoming X-Internal-Scope=${declared}`,
+          });
+        }
+      }
+
       const pair = new WebSocketPair();
       const [client, server] = [pair[0], pair[1]];
 

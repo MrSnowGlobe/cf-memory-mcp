@@ -2,15 +2,20 @@ import { createMiddleware } from 'hono/factory';
 import type { AppType } from '../types';
 import { hasValidSession } from '../auth/session';
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    const dummy = new Uint8Array(a.length);
-    const dummyB = new Uint8Array(a.length);
-    crypto.subtle.timingSafeEqual(dummy, dummyB);
-    return false;
-  }
+async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  // Hash both sides first so the comparison always operates on equal-length
+  // 32-byte buffers — eliminates the early-exit-on-length-mismatch branch
+  // that the previous implementation tried to compensate for with a dummy
+  // operation but which still leaked the secret's length via wall-clock
+  // time. crypto.subtle.digest runs in constant time relative to inputs of
+  // similar length, so the only timing signal left is "did the caller send
+  // a comparable-length token", which is uninteresting.
   const encoder = new TextEncoder();
-  return crypto.subtle.timingSafeEqual(encoder.encode(a), encoder.encode(b));
+  const [ah, bh] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(a)),
+    crypto.subtle.digest('SHA-256', encoder.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(ah, bh);
 }
 
 /**
@@ -23,7 +28,7 @@ export const authMiddleware = createMiddleware<AppType>(async (c, next) => {
   const authHeader = c.req.header('Authorization');
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
-    if (timingSafeEqual(token, c.env.AUTH_TOKEN)) {
+    if (await timingSafeEqual(token, c.env.AUTH_TOKEN)) {
       await next();
       return;
     }
