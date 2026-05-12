@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppType } from './types';
 import { HttpError } from './utils/errors';
 import { authMiddleware } from './middleware/auth';
+import { adminAuthMiddleware } from './middleware/admin-auth';
 import { loginHandler, logoutHandler, meHandler } from './auth/session';
 import { projectScopeMiddleware } from './middleware/project-scope';
 import { userScopeMiddleware } from './middleware/user-scope';
@@ -96,6 +97,14 @@ app.use('/api/*', userScopeMiddleware);
 app.use('/mcp/*', authMiddleware);
 app.use('/mcp/*', projectScopeMiddleware);
 app.use('/mcp/*', userScopeMiddleware);
+
+// Admin routes need a second gate beyond AUTH_TOKEN — these are the
+// destructive operations (purge, namespace migrations) that a leaked
+// service-to-service bearer must not be allowed to invoke. Mounted after
+// the standard auth chain so the caller still gets the normal 401 if their
+// AUTH_TOKEN is wrong, and a 401/403 from this gate if the admin token is
+// missing or wrong.
+app.use('/api/v1/admin/*', adminAuthMiddleware);
 
 // Broad per-tenant cap — stands in for an edge-level WAF rule.
 app.use('/api/*', globalRateLimitMiddleware);

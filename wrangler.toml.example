@@ -5,11 +5,19 @@ compatibility_date = "2025-04-01"
 [vars]
 EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m"
 EMBEDDING_DIMENSIONS = "768"
-AUTH_TOKEN = "CHANGE_ME"  # Bearer token for service-to-service calls (MCP, agents, scripts)
-# OBSERVATORY_PASSWORD: set as a secret, NOT in wrangler.toml.
-#   npx wrangler secret put OBSERVATORY_PASSWORD
-# This is the password for the visualizer browser login. Required to use
-# the Observatory UI. AUTH_TOKEN bearer still works for non-browser clients.
+# Secrets — set as Wrangler secrets, NEVER as [vars]. Values in [vars] are
+# bundled into the Worker script and visible in the dashboard.
+#   AUTH_TOKEN          Bearer token for service-to-service calls.
+#                       npx wrangler secret put AUTH_TOKEN
+#   ADMIN_TOKEN         Separate token required by /api/v1/admin/* routes
+#                       (migrate-namespaces, purge). Optional — without it
+#                       the admin routes refuse every request.
+#                       npx wrangler secret put ADMIN_TOKEN
+#   OBSERVATORY_PASSWORD Password for the Observatory browser login.
+#                       Required to use the visualizer UI.
+#                       npx wrangler secret put OBSERVATORY_PASSWORD
+# For local development copy the value into `.dev.vars` (gitignored):
+#   AUTH_TOKEN = "local-dev-only"
 
 [[d1_databases]]
 binding = "DB"

@@ -9,6 +9,9 @@ export interface Bindings {
   CACHE: KVNamespace;
   AI: Ai;
   AUTH_TOKEN: string;
+  /** Separate bearer required by /api/v1/admin/* routes. When unset, every
+   *  admin call is refused. */
+  ADMIN_TOKEN?: string;
   /** Password for the Observatory browser login. Empty = browser auth disabled. */
   OBSERVATORY_PASSWORD?: string;
   EMBEDDING_MODEL: string;
