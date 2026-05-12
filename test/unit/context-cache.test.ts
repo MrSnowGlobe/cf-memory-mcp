@@ -110,7 +110,7 @@ describe('POST /api/v1/context — KV cache', () => {
     const r1 = await app.fetch(postContext(body), env);
     expect(r1.status).toBe(200);
     expect(r1.headers.get('X-Cache')).toBe('MISS');
-    expect((await r1.json()).errors).toBeTruthy();
+    expect(((await r1.json()) as { errors?: unknown }).errors).toBeTruthy();
 
     // Second call must not see a cache hit — the failure response was skipped.
     spy.mockRestore();

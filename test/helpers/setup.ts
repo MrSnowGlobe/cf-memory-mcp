@@ -31,6 +31,7 @@ export async function clearAllTables(db: D1Database): Promise<void> {
     'facts',
     'preferences',
     'entities',
+    'admin_audit',
     'users',
     'projects',
   ];
@@ -282,6 +283,7 @@ export interface TestEnv extends Bindings {
   VEC_FACTS: VectorizeIndex;
   VEC_TRACES: VectorizeIndex;
   AUTH_TOKEN: string;
+  ADMIN_TOKEN: string;
   EMBEDDING_MODEL: string;
   EMBEDDING_DIMENSIONS: string;
 }
@@ -301,6 +303,7 @@ export function createTestEnv(db: D1Database, kv: KVNamespace): TestEnv {
     VEC_FACTS: createMockVectorize(),
     VEC_TRACES: createMockVectorize(),
     AUTH_TOKEN: 'test-token',
+    ADMIN_TOKEN: 'test-admin-token',
     EMBEDDING_MODEL: '@cf/baai/bge-base-en-v1.5',
     EMBEDDING_DIMENSIONS: '768',
   };

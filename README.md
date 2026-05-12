@@ -120,7 +120,21 @@ cp wrangler.toml.example wrangler.toml
 Edit `wrangler.toml` and fill in:
 - `database_id` — from the D1 create output
 - `id` under `[[kv_namespaces]]` — from the KV create output
-- `AUTH_TOKEN` — set to a strong secret (this protects all API/MCP access)
+
+Then set the bearer tokens as Wrangler **secrets** (not `[vars]` — values in `[vars]` are bundled into the Worker script and visible in the dashboard):
+
+```bash
+npx wrangler secret put AUTH_TOKEN           # bearer for all /api/* and /mcp/* routes
+npx wrangler secret put ADMIN_TOKEN          # separate bearer required by /api/v1/admin/* routes
+npx wrangler secret put OBSERVATORY_PASSWORD # browser-login password (optional, enables the SPA login)
+```
+
+For local development, create `.dev.vars` (already gitignored) with the same keys:
+
+```ini
+AUTH_TOKEN = "local-dev-only"
+ADMIN_TOKEN = "local-dev-admin"
+```
 
 ### 4. Apply database migration
 
