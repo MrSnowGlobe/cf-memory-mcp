@@ -61,6 +61,21 @@ export async function clearAllTables(db: D1Database): Promise<void> {
     .run();
 }
 
+/**
+ * Delete every key in the test KV namespace. vitest-pool-workers ≥0.18
+ * isolates storage per test *file*, not per test, so KV-cached values
+ * (tool stats, conversations, contexts) leak between tests in the same
+ * file unless cleared alongside the D1 tables.
+ */
+export async function clearCache(kv: KVNamespace): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const list = await kv.list({ cursor });
+    await Promise.all(list.keys.map((k) => kv.delete(k.name)));
+    cursor = list.list_complete ? undefined : list.cursor;
+  } while (cursor);
+}
+
 // ---------------------------------------------------------------------------
 // Mock Vectorize
 // ---------------------------------------------------------------------------

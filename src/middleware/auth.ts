@@ -26,7 +26,10 @@ async function timingSafeEqual(a: string, b: string): Promise<boolean> {
  */
 export const authMiddleware = createMiddleware<AppType>(async (c, next) => {
   const authHeader = c.req.header('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
+  // Fail closed when the AUTH_TOKEN secret is missing: comparing against
+  // undefined hashes an empty string on both sides, so `Bearer ` (empty
+  // token) would authenticate. Mirrors the admin middleware's unset guard.
+  if (authHeader?.startsWith('Bearer ') && c.env.AUTH_TOKEN) {
     const token = authHeader.slice(7);
     if (await timingSafeEqual(token, c.env.AUTH_TOKEN)) {
       await next();
