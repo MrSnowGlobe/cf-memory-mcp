@@ -9,11 +9,11 @@ export default defineConfig(async () => {
     plugins: [
       cloudflareTest({
         wrangler: { configPath: './wrangler.toml' },
-        // Don't open a remote proxy session at startup — it hard-fails the
-        // whole run when wrangler auth is missing/expired. AI/Vectorize
-        // calls fail per-test instead, matching the pre-0.18 behaviour
-        // (run `wrangler login` for the two tests that embed for real).
-        remoteBindings: false,
+        // Proxy bindings marked `remote = true` in wrangler.toml (AI,
+        // Vectorize) to the real Cloudflare services — neither has a local
+        // simulator. Requires a valid `wrangler login`; without one the run
+        // fails at startup rather than per-test.
+        remoteBindings: true,
         miniflare: {
           d1Databases: ['DB'],
           kvNamespaces: ['CACHE'],
