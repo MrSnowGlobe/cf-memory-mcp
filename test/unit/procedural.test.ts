@@ -5,6 +5,7 @@ import { ShortTermMemory } from '../../src/memory/short-term';
 import {
   applyMigrations,
   clearAllTables,
+  clearCache,
   createTestEnv,
   seedProject,
 } from '../helpers/setup';
@@ -17,6 +18,7 @@ describe('ProceduralMemory', () => {
   beforeEach(async () => {
     await applyMigrations(env.DB);
     await clearAllTables(env.DB);
+    await clearCache(env.CACHE);
     testEnv = createTestEnv(env.DB, env.CACHE);
     await seedProject(env.DB, PROJECT_ID);
   });

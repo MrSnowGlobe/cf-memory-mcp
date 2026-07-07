@@ -47,6 +47,22 @@ function constantTimeEqual(a: string, b: string): boolean {
   return result === 0;
 }
 
+/**
+ * Password comparison hashes both sides before the constant-time compare so
+ * the length-mismatch early exit above never runs on attacker-controlled
+ * input — a plain compare leaks the password's length via wall-clock time.
+ * Cookie signature comparison keeps the plain path: both sides are fixed-
+ * length hex HMACs, so there is no length signal to leak.
+ */
+async function timingSafeStringEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [ah, bh] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(ah, bh);
+}
+
 async function buildCookieValue(secret: string): Promise<string> {
   const expiry = Math.floor(Date.now() / 1000) + SESSION_DURATION_SECONDS;
   const payload = `${expiry}:${SESSION_SCOPE}`;
@@ -85,7 +101,7 @@ export async function loginHandler(c: Context<AppType>): Promise<Response> {
   if (!password) {
     return c.json({ error: 'Browser login is not configured on this worker' }, 503);
   }
-  if (!body.password || !constantTimeEqual(body.password, password)) {
+  if (!body.password || !(await timingSafeStringEqual(body.password, password))) {
     return c.json({ error: 'Invalid password' }, 401);
   }
   const value = await buildCookieValue(password);
